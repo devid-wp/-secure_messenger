@@ -1,7 +1,17 @@
 #include "../include/crypto.h"
+#include <algorithm>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <stdexcept>
+
+MemoryGuard::MemoryGuard(void* buffer, std::size_t size)
+    : buffer_(buffer), size_(size) {}
+
+MemoryGuard::~MemoryGuard() {
+    if (buffer_ && size_ > 0) {
+        OPENSSL_cleanse(buffer_, size_);
+    }
+}
 
 std::string CryptoEngine::generate_salt() {
     constexpr size_t SALT_LEN = 16;
@@ -35,4 +45,20 @@ std::string CryptoEngine::hash_password(const std::string& password, const std::
     }
 
     return hash;
+}
+
+bool CryptoEngine::secure_compare(const std::string& a, const std::string& b) {
+    const size_t len = std::max(a.size(), b.size());
+    std::string lhs(len, '\0');
+    std::string rhs(len, '\0');
+
+    if (!a.empty()) {
+        std::copy(a.begin(), a.end(), lhs.begin());
+    }
+    if (!b.empty()) {
+        std::copy(b.begin(), b.end(), rhs.begin());
+    }
+
+    // CRYPTO_memcmp выполняет сравнение в постоянное время по длине.
+    return CRYPTO_memcmp(lhs.data(), rhs.data(), len) == 0;
 }
