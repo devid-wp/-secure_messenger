@@ -49,16 +49,13 @@ std::string CryptoEngine::hash_password(const std::string& password, const std::
 
 bool CryptoEngine::secure_compare(const std::string& a, const std::string& b) {
     const size_t len = std::max(a.size(), b.size());
-    std::string lhs(len, '\0');
-    std::string rhs(len, '\0');
+    unsigned char diff = static_cast<unsigned char>(a.size() ^ b.size());
 
-    if (!a.empty()) {
-        std::copy(a.begin(), a.end(), lhs.begin());
-    }
-    if (!b.empty()) {
-        std::copy(b.begin(), b.end(), rhs.begin());
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char ca = i < a.size() ? static_cast<unsigned char>(a[i]) : 0;
+        unsigned char cb = i < b.size() ? static_cast<unsigned char>(b[i]) : 0;
+        diff |= ca ^ cb;
     }
 
-    // CRYPTO_memcmp выполняет сравнение в постоянное время по длине.
-    return CRYPTO_memcmp(lhs.data(), rhs.data(), len) == 0;
+    return diff == 0;
 }

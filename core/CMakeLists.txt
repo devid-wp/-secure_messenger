@@ -33,3 +33,7 @@ target_link_libraries(secure_core
 if(TARGET pybind11::module)
   target_link_libraries(secure_core PRIVATE pybind11::module)
 endif()
+
+pybind11_add_module(crypto_core ../bindings/crypto_module.cpp)
+target_link_libraries(crypto_core PRIVATE secure_core OpenSSL::SSL OpenSSL::Crypto)
+target_include_directories(crypto_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
