@@ -1,43 +1,150 @@
+/* ============================================================
+   Secure Messenger — Discord (dark) + Telegram (light) styles
+   ============================================================ */
+
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
+:root {
+  /* Telegram-like light theme */
+  --bg-app: #ffffff;
+  --bg-sidebar: #ffffff;
+  --bg-side-rail: #f4f4f5;
+  --bg-chat: #e6ebf1;
+  --bg-header: #ffffff;
+  --bg-input: #ffffff;
+  --bg-hover: #f0f2f5;
+  --bg-active: #e7f0fd;
+  --bg-overlay: rgba(0, 0, 0, 0.4);
+
+  --text-primary: #0f1419;
+  --text-secondary: #707579;
+  --text-muted: #a1a5a8;
+
+  --bubble-own-bg: linear-gradient(135deg, #4dc4ff 0%, #38b6ff 100%);
+  --bubble-own-text: #ffffff;
+  --bubble-other-bg: #ffffff;
+  --bubble-other-text: #0f1419;
+
+  --accent: #3390ec;
+  --accent-hover: #2483d6;
+  --accent-text: #ffffff;
+  --accent-soft: #e7f0fd;
+  --danger: #e53935;
+  --success: #4caf50;
+
+  --border: #e6e6e6;
+  --border-strong: #d0d0d0;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.18);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+:root[data-theme='dark'] {
+  /* Discord-like dark theme */
+  --bg-app: #313338;
+  --bg-sidebar: #2b2d31;
+  --bg-side-rail: #1e1f22;
+  --bg-chat: #313338;
+  --bg-header: #313338;
+  --bg-input: #383a40;
+  --bg-hover: #35373c;
+  --bg-active: #404249;
+  --bg-overlay: rgba(0, 0, 0, 0.6);
+
+  --text-primary: #f2f3f5;
+  --text-secondary: #b5bac1;
+  --text-muted: #80848e;
+
+  --bubble-own-bg: #5865f2;
+  --bubble-own-text: #ffffff;
+  --bubble-other-bg: #383a40;
+  --bubble-other-text: #dbdee1;
+
+  --accent: #5865f2;
+  --accent-hover: #4752c4;
+  --accent-text: #ffffff;
+  --accent-soft: rgba(88, 101, 242, 0.1);
+  --danger: #ed4245;
+  --success: #3ba55d;
+
+  --border: #3f4147;
+  --border-strong: #4a4d54;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #f0f0f0;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
 }
 
 button {
-  background-color: #007bff;
-  color: white;
-  border: none;
-  padding: 10px 20px;
-  border-radius: 4px;
+  font-family: inherit;
   cursor: pointer;
-  font-size: 14px;
-  transition: background-color 0.2s;
+  border: none;
+  background: none;
+  color: inherit;
 }
 
-button:hover {
-  background-color: #0056b3;
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
-input {
-  padding: 10px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  font-size: 14px;
-  width: 100%;
-}
-
-input:focus {
+input,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
   outline: none;
-  border-color: #007bff;
-  box-shadow: 0 0 4px rgba(0, 123, 255, 0.5);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* Custom scrollbar (Discord-style slim) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }
