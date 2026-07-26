@@ -1,48 +1,95 @@
 # Secure Messenger
 
-Защищённый мессенджер на FastAPI + React.
+Мессенджер на FastAPI, SQLAlchemy, PostgreSQL/SQLite и React.
 
-## Стек
+> Текущая реализация ещё не содержит E2EE и хранит сообщения в открытом виде.
+> Нормативная модель безопасности находится в [docs/README.md](docs/README.md).
 
-- **Backend:** FastAPI, SQLite, PBKDF2-HMAC-SHA256 (100 000 итераций) для хеширования паролей
-- **Frontend:** React 18, Vite
+## Backend
 
-## Структура
-
-```
-app/                 FastAPI-бэкенд
-  auth.py            модуль регистрации/проверки пользователя
-  crypto.py          PBKDF2 + secure_compare
-  database.py        обёртка над SQLite
-  main.py            HTTP + WebSocket API
-  schema.sql         схема БД
-frontend/            React-приложение
-  src/components/    LoginForm, ChatApp
-```
-
-## Запуск
-
-### 1. Установить зависимости бэкенда
-
-```bash
-pip install -r requirements.txt
+```text
+app/
+  core/config.py       environment и DATABASE_URL
+  db.py                async SQLAlchemy engine и session factory
+  models.py            ORM-модели, CHECK, UNIQUE и FOREIGN KEY
+  schemas.py           модели API
+  dependencies.py      request-scoped DB и authentication dependency
+  routers/
+    auth.py            /api/v1/auth
+    users.py           /api/v1/users
+    chats.py           /api/v1/chats
+    messages.py        /api/v1/chats/{id}/messages
+    realtime.py        /api/v1/realtime/ws
+  services/            Redis sessions, rate limiting, realtime, serializers
+  main.py              сборка FastAPI
+migrations/            Alembic revisions
 ```
 
-### 2. Запустить бэкенд
+Подробности фундамента: [docs/foundation.md](docs/foundation.md).
 
-```bash
-cd app
-python main.py
+## Локальный запуск с SQLite
+
+Команды выполняются из корня репозитория:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m app.main
 ```
 
-API поднимется на `http://localhost:8000`.
+По умолчанию используется `secure_messenger.db` в корне проекта. Приложение
+не создаёт таблицы при импорте: перед запуском всегда выполняется Alembic.
 
-### 3. Запустить фронтенд (в другом терминале)
+## PostgreSQL
 
-```bash
+Для локальной проверки PostgreSQL добавлен `compose.yaml`:
+
+```powershell
+docker compose up -d db
+docker compose up -d redis
+$env:DATABASE_URL = "postgresql+psycopg://secure_messenger:local-development-only@localhost:5432/secure_messenger"
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m app.main
+```
+
+В production необходимо установить:
+
+```text
+APP_ENV=production
+DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/DATABASE
+REDIS_URL=redis://HOST:6379/0
+```
+
+При `APP_ENV=production` приложение отклоняет SQLite-конфигурацию.
+
+## Frontend
+
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-UI откроется на `http://localhost:5173`.
+Frontend обращается к versioned API `/api/v1`. Другой origin backend задаётся
+через `VITE_API_URL`.
+
+## Миграции
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic current
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic check
+```
+
+Foundation revision сохраняет stage-0 чаты и сообщения. Legacy-участники без
+учётной записи становятся неактивными placeholder users, чтобы все связи могли
+иметь настоящие внешние ключи.
+
+## Тесты
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+cd frontend
+npm run build
+```
