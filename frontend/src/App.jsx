@@ -23,7 +23,21 @@ function App() {
     setLogin(newLogin)
   }
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const currentToken = token
+    if (currentToken) {
+      try {
+        await fetch(
+          `${import.meta.env.VITE_API_URL ?? 'http://localhost:8000'}/api/v1/auth/logout`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${currentToken}` },
+          }
+        )
+      } catch {
+        // Always clear local credentials, even when the API is unavailable.
+      }
+    }
     localStorage.removeItem('token')
     localStorage.removeItem('login')
     setToken(null)

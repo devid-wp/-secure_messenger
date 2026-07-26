@@ -14,7 +14,7 @@ function LoginForm({ onLogin }) {
     setError('')
     setIsLoading(true)
 
-    const endpoint = isRegister ? '/register' : '/login'
+    const endpoint = isRegister ? '/api/v1/auth/register' : '/api/v1/auth/login'
 
     try {
       const response = await fetch(`${API_URL}${endpoint}`, {
