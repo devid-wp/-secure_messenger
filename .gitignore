@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local SQLite state and backups
+*.db
+*.db-shm
+*.db-wal
+backups/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Local configuration
+.env
+.env.*
+!.env.example
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
