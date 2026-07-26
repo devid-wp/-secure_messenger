@@ -1,0 +1,45 @@
+from collections.abc import AsyncIterator
+
+from fastapi import Depends, Header, HTTPException, Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .models import Device, User
+
+
+async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
+    async with request.app.state.session_factory() as session:
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def get_current_user(
+    request: Request,
+    authorization: str | None = Header(None),
+    session: AsyncSession = Depends(get_db),
+) -> User:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    token = authorization.removeprefix("Bearer ")
+    await request.app.state.rate_limiter.check(
+        f"api:{request.client.host if request.client else 'unknown'}"
+    )
+    session_data = await request.app.state.session_store.resolve(token)
+    if session_data is None:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    device = await session.get(Device, session_data.device_id)
+    user = await session.get(User, session_data.user_id)
+    if device is None or device.revoked_at is not None:
+        await request.app.state.session_store.revoke(token)
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if user is None or not user.is_active or user.is_placeholder:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return user
+
+
+async def get_bearer_token(authorization: str | None = Header(None)) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return authorization.removeprefix("Bearer ")
