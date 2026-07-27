@@ -71,6 +71,34 @@ class DirectMessagesApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 422)
 
+    def test_direct_chat_creation_is_idempotent_and_list_is_private(self) -> None:
+        alice_token = self.register_and_login("alice")
+        bob_token = self.register_and_login("bob")
+        charlie_token = self.register_and_login("charlie")
+
+        first = self.client.post(
+            "/api/v1/chats/dm",
+            json={"login": "bob"},
+            headers=self.headers(alice_token),
+        )
+        second = self.client.post(
+            "/api/v1/chats/dm",
+            json={"login": "alice"},
+            headers=self.headers(bob_token),
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(first.json()["id"], second.json()["id"])
+
+        alice_chats = self.client.get(
+            "/api/v1/chats/dm", headers=self.headers(alice_token)
+        )
+        charlie_chats = self.client.get(
+            "/api/v1/chats/dm", headers=self.headers(charlie_token)
+        )
+        self.assertEqual([chat["id"] for chat in alice_chats.json()], [first.json()["id"]])
+        self.assertEqual(charlie_chats.json(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -112,6 +112,11 @@ class Chat(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     type: Mapped[str] = mapped_column(String(16), nullable=False)
     name: Mapped[Optional[str]] = mapped_column(String(255))
+    direct_key: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        unique=True,
+        index=True,
+    )
     created_by_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,

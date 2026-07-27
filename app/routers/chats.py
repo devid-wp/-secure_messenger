@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import exists, func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_current_user, get_db
@@ -36,6 +37,26 @@ async def list_chats(
     return [serialize_chat(chat) for chat in chats]
 
 
+@router.get("/dm", response_model=list[ChatResponse])
+async def list_direct_chats(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    chats = (
+        await session.scalars(
+            select(Chat)
+            .join(ChatMember)
+            .where(
+                ChatMember.user_id == current_user.id,
+                Chat.type == "dm",
+            )
+            .options(*_chat_load_options())
+            .order_by(Chat.created_at.desc(), Chat.id.desc())
+        )
+    ).all()
+    return [serialize_chat(chat) for chat in chats]
+
+
 @router.post("/dm", response_model=ChatResponse)
 async def create_direct_chat(
     request_body: DirectChatRequest,
@@ -54,32 +75,10 @@ async def create_direct_chat(
     if other_user.id == current_user.id:
         raise HTTPException(status_code=400, detail="Invalid chat participant")
 
-    member_count = (
-        select(func.count(ChatMember.user_id))
-        .where(ChatMember.chat_id == Chat.id)
-        .correlate(Chat)
-        .scalar_subquery()
-    )
-    has_current = exists(
-        select(ChatMember.chat_id).where(
-            ChatMember.chat_id == Chat.id,
-            ChatMember.user_id == current_user.id,
-        )
-    )
-    has_other = exists(
-        select(ChatMember.chat_id).where(
-            ChatMember.chat_id == Chat.id,
-            ChatMember.user_id == other_user.id,
-        )
-    )
+    direct_key = f"{min(current_user.id, other_user.id)}:{max(current_user.id, other_user.id)}"
     chat = await session.scalar(
         select(Chat)
-        .where(
-            Chat.type == "dm",
-            has_current,
-            has_other,
-            member_count == 2,
-        )
+        .where(Chat.direct_key == direct_key)
         .options(*_chat_load_options())
         .order_by(Chat.id)
     )
@@ -87,6 +86,7 @@ async def create_direct_chat(
         chat = Chat(
             type="dm",
             name=None,
+            direct_key=direct_key,
             created_by_user_id=current_user.id,
             members=[
                 ChatMember(user_id=current_user.id, role="owner"),
@@ -94,10 +94,13 @@ async def create_direct_chat(
             ],
         )
         session.add(chat)
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
         chat = await session.scalar(
             select(Chat)
-            .where(Chat.id == chat.id)
+            .where(Chat.direct_key == direct_key)
             .options(*_chat_load_options())
         )
     return serialize_chat(chat)
