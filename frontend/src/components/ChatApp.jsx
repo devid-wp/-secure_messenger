@@ -58,9 +58,12 @@ function messageTime(timestamp) {
 function ChatApp({ token, login, onLogout }) {
   const { theme, toggle } = useTheme()
   const [chats, setChats] = useState([])
-  const [users, setUsers] = useState([])
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState([])
   const [selectedChatId, setSelectedChatId] = useState(null)
   const [messages, setMessages] = useState([])
+  const [nextCursor, setNextCursor] = useState(null)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const [inputText, setInputText] = useState('')
   const [error, setError] = useState('')
   const [wsReady, setWsReady] = useState(false)
@@ -68,6 +71,7 @@ function ChatApp({ token, login, onLogout }) {
   const selectedChatIdRef = useRef(null)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
+  const prependingHistoryRef = useRef(false)
 
   const authHeaders = useMemo(
     () => ({ Authorization: `Bearer ${token}` }),
@@ -88,7 +92,7 @@ function ChatApp({ token, login, onLogout }) {
         userLogin: null,
       }
     })
-    const newDirectChats = users
+    const newDirectChats = searchResults
       .filter((user) => !existingDmUsers.has(user.login))
       .map((user) => ({
         key: `user-${user.login}`,
@@ -97,7 +101,7 @@ function ChatApp({ token, login, onLogout }) {
         userLogin: user.login,
       }))
     return [...existingChats, ...newDirectChats]
-  }, [chats, login, users])
+  }, [chats, login, searchResults])
 
   const selectedConversation = conversations.find(
     (conversation) => conversation.chatId === selectedChatId
@@ -108,6 +112,10 @@ function ChatApp({ token, login, onLogout }) {
   }, [selectedChatId])
 
   useEffect(() => {
+    if (prependingHistoryRef.current) {
+      prependingHistoryRef.current = false
+      return
+    }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
@@ -116,25 +124,21 @@ function ChatApp({ token, login, onLogout }) {
 
     const loadWorkspace = async () => {
       try {
-        const [chatsResponse, usersResponse] = await Promise.all([
-          fetch(`${API_URL}/api/v1/chats`, { headers: authHeaders }),
-          fetch(`${API_URL}/api/v1/users`, { headers: authHeaders }),
-        ])
-        if (chatsResponse.status === 401 || usersResponse.status === 401) {
+        const chatsResponse = await fetch(
+          `${API_URL}/api/v1/chats/dm`,
+          { headers: authHeaders }
+        )
+        if (chatsResponse.status === 401) {
           onLogout()
           return
         }
-        if (!chatsResponse.ok || !usersResponse.ok) {
+        if (!chatsResponse.ok) {
           throw new Error('Не удалось загрузить список чатов')
         }
 
-        const [chatData, userData] = await Promise.all([
-          chatsResponse.json(),
-          usersResponse.json(),
-        ])
+        const chatData = await chatsResponse.json()
         if (cancelled) return
         setChats(chatData)
-        setUsers(userData)
         setSelectedChatId((currentId) => {
           if (chatData.some((chat) => chat.id === currentId)) return currentId
           return chatData[0]?.id ?? null
@@ -149,6 +153,35 @@ function ChatApp({ token, login, onLogout }) {
       cancelled = true
     }
   }, [authHeaders, onLogout])
+
+  useEffect(() => {
+    const query = searchQuery.trim()
+    if (query.length < 2) {
+      setSearchResults([])
+      return undefined
+    }
+    const controller = new AbortController()
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(
+          `${API_URL}/api/v1/users/search?q=${encodeURIComponent(query)}`,
+          { headers: authHeaders, signal: controller.signal }
+        )
+        if (response.status === 401) {
+          onLogout()
+          return
+        }
+        if (!response.ok) throw new Error('Не удалось выполнить поиск')
+        setSearchResults(await response.json())
+      } catch (searchError) {
+        if (searchError.name !== 'AbortError') setError(searchError.message)
+      }
+    }, 250)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [authHeaders, onLogout, searchQuery])
 
   useEffect(() => {
     if (selectedChatId === null) {
@@ -170,7 +203,8 @@ function ChatApp({ token, login, onLogout }) {
         if (!response.ok) throw new Error('Не удалось загрузить сообщения')
         const data = await response.json()
         if (!cancelled) {
-          setMessages(data)
+          setMessages(data.items)
+          setNextCursor(data.next_cursor)
           setError('')
         }
       } catch (loadError) {
@@ -179,11 +213,34 @@ function ChatApp({ token, login, onLogout }) {
     }
 
     setMessages([])
+    setNextCursor(null)
     loadMessages()
     return () => {
       cancelled = true
     }
   }, [authHeaders, onLogout, selectedChatId])
+
+  const loadOlderMessages = async () => {
+    if (!nextCursor || selectedChatId === null || loadingOlder) return
+    setLoadingOlder(true)
+    try {
+      const response = await fetch(
+        `${API_URL}/api/v1/chats/${selectedChatId}/messages?cursor=${
+          encodeURIComponent(nextCursor)
+        }`,
+        { headers: authHeaders }
+      )
+      if (!response.ok) throw new Error('Не удалось загрузить историю')
+      const data = await response.json()
+      prependingHistoryRef.current = true
+      setMessages((previous) => [...data.items, ...previous])
+      setNextCursor(data.next_cursor)
+    } catch (historyError) {
+      setError(historyError.message)
+    } finally {
+      setLoadingOlder(false)
+    }
+  }
 
   useEffect(() => {
     const ws = new WebSocket(
@@ -208,7 +265,14 @@ function ChatApp({ token, login, onLogout }) {
           && data.chat_id === selectedChatIdRef.current
         ) {
           setMessages((previous) => {
-            if (previous.some((message) => message.id === data.id)) return previous
+            if (previous.some((message) => (
+              message.id === data.id
+              || (
+                data.client_id
+                && message.client_id === data.client_id
+                && message.sender === data.sender
+              )
+            ))) return previous
             return [...previous, data]
           })
           setError('')
@@ -252,6 +316,8 @@ function ChatApp({ token, login, onLogout }) {
           : [chat, ...previous]
       ))
       setSelectedChatId(chat.id)
+      setSearchQuery('')
+      setSearchResults([])
     } catch (createError) {
       setError(createError.message)
     }
@@ -270,7 +336,11 @@ function ChatApp({ token, login, onLogout }) {
       return
     }
 
-    ws.send(JSON.stringify({ chat_id: selectedChatId, text }))
+    ws.send(JSON.stringify({
+      chat_id: selectedChatId,
+      text,
+      client_id: crypto.randomUUID(),
+    }))
     setInputText('')
     inputRef.current?.focus()
   }
@@ -294,6 +364,15 @@ function ChatApp({ token, login, onLogout }) {
         </header>
 
         <div className="channel-section-title">Прямые сообщения</div>
+        <div className="user-search">
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Найти пользователя"
+            aria-label="Поиск пользователей"
+          />
+        </div>
         <nav className="channel-list">
           {conversations.map((conversation) => (
             <button
@@ -353,6 +432,16 @@ function ChatApp({ token, login, onLogout }) {
 
         <div className="messages-list">
           {error && <p className="error-message">{error}</p>}
+          {nextCursor && (
+            <button
+              type="button"
+              className="load-older"
+              onClick={loadOlderMessages}
+              disabled={loadingOlder}
+            >
+              {loadingOlder ? 'Загрузка…' : 'Загрузить предыдущие сообщения'}
+            </button>
+          )}
           {messages.length === 0 && (
             <div className="messages-empty">
               <div className="messages-empty__icon">💬</div>
