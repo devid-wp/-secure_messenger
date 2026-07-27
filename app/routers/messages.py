@@ -42,7 +42,7 @@ async def list_messages(
         await session.scalars(
             statement
             .options(selectinload(Message.sender))
-            .order_by(Message.timestamp.desc(), Message.id.desc())
+            .order_by(Message.id.desc())
             .limit(limit + 1)
         )
     ).all()
