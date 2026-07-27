@@ -74,6 +74,10 @@ npm run dev
 Frontend обращается к versioned API `/api/v1`. Другой origin backend задаётся
 через `VITE_API_URL`.
 
+Stage 3 добавляет поиск пользователей, идемпотентное создание DM, cursor-history
+и клиентские UUID сообщений. Контракты описаны в
+[docs/stage-3-direct-messages.md](docs/stage-3-direct-messages.md).
+
 ## Миграции
 
 ```powershell

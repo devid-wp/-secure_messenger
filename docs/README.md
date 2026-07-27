@@ -17,6 +17,7 @@
 4. [Модель угроз и политика метаданных](security-model.md)
 5. [Потеря пароля, устройства и восстановление](recovery.md)
 6. [ADR-0001: E2EE на базе MLS и OpenMLS](e2ee-protocol.md)
+7. [Stage 3: рабочие личные сообщения](stage-3-direct-messages.md)
 7. [Фундамент backend и миграций](foundation.md)
 
 Слова **MUST**, **MUST NOT**, **SHOULD** и **MAY** обозначают обязательное,
