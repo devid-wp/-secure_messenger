@@ -18,5 +18,6 @@ def serialize_message(message: Message) -> dict:
         "chat_id": message.chat_id,
         "sender": message.sender.login,
         "content": message.content,
+        "client_id": message.client_id,
         "timestamp": message.timestamp,
     }

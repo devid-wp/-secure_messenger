@@ -177,6 +177,11 @@ class Message(Base):
             name="content_length",
         ),
         Index("ix_messages_chat_timestamp", "chat_id", "timestamp", "id"),
+        UniqueConstraint(
+            "sender_user_id",
+            "client_id",
+            name="uq_messages_sender_client_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -189,6 +194,7 @@ class Message(Base):
         nullable=False,
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    client_id: Mapped[Optional[str]] = mapped_column(String(36))
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

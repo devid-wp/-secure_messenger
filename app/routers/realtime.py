@@ -1,8 +1,10 @@
 import json
 import logging
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.models import ChatMember, Message, User
@@ -45,10 +47,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 payload = json.loads(raw)
                 chat_id = payload["chat_id"]
                 text = payload["text"]
+                raw_client_id = payload.get("client_id") or str(uuid4())
                 if isinstance(chat_id, bool) or not isinstance(chat_id, int):
                     raise ValueError
                 if not isinstance(text, str) or not text.strip():
                     raise ValueError
+                client_id = str(UUID(raw_client_id))
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 await websocket.send_json(
                     {"type": "error", "detail": "Invalid message payload"}
@@ -62,18 +66,51 @@ async def websocket_endpoint(websocket: WebSocket):
                         {"type": "error", "detail": "Chat not found"}
                     )
                     continue
-                message = Message(
-                    chat_id=chat_id,
-                    sender_user_id=user_id,
-                    content=text.strip(),
-                )
-                session.add(message)
-                await session.commit()
                 message = await session.scalar(
                     select(Message)
-                    .where(Message.id == message.id)
+                    .where(
+                        Message.sender_user_id == user_id,
+                        Message.client_id == client_id,
+                    )
                     .options(selectinload(Message.sender))
                 )
+                if message is not None and (
+                    message.chat_id != chat_id or message.content != text.strip()
+                ):
+                    await websocket.send_json(
+                        {"type": "error", "detail": "client_id already used"}
+                    )
+                    continue
+                is_new_message = message is None
+                if message is None:
+                    message = Message(
+                        chat_id=chat_id,
+                        sender_user_id=user_id,
+                        content=text.strip(),
+                        client_id=client_id,
+                    )
+                    session.add(message)
+                    try:
+                        await session.commit()
+                    except IntegrityError:
+                        await session.rollback()
+                        is_new_message = False
+                    message = await session.scalar(
+                        select(Message)
+                        .where(
+                            Message.sender_user_id == user_id,
+                            Message.client_id == client_id,
+                        )
+                        .options(selectinload(Message.sender))
+                    )
+                    if message is None or (
+                        message.chat_id != chat_id
+                        or message.content != text.strip()
+                    ):
+                        await websocket.send_json(
+                            {"type": "error", "detail": "client_id already used"}
+                        )
+                        continue
                 member_ids = set(
                     await session.scalars(
                         select(ChatMember.user_id).where(
@@ -84,7 +121,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 serialized = serialize_message(message)
                 serialized["timestamp"] = message.timestamp.isoformat()
             await manager.broadcast(
-                member_ids,
+                member_ids if is_new_message else {user_id},
                 {"type": "message", **serialized},
             )
     except WebSocketDisconnect:

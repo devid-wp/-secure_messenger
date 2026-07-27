@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from uuid import uuid4
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -154,6 +155,39 @@ class DirectMessagesApiTests(unittest.TestCase):
             headers=headers,
         )
         self.assertEqual(invalid.status_code, 400)
+
+    def test_client_uuid_makes_message_send_idempotent(self) -> None:
+        alice_token = self.register_and_login("alice")
+        self.register_and_login("bob")
+        headers = self.headers(alice_token)
+        chat = self.client.post(
+            "/api/v1/chats/dm",
+            json={"login": "bob"},
+            headers=headers,
+        ).json()
+        client_id = str(uuid4())
+        payload = {
+            "chat_id": chat["id"],
+            "text": "send once",
+            "client_id": client_id,
+        }
+
+        with self.client.websocket_connect(
+            "/api/v1/realtime/ws",
+            subprotocols=[f"bearer.{alice_token}"],
+        ) as websocket:
+            websocket.send_json(payload)
+            first = websocket.receive_json()
+            websocket.send_json(payload)
+            second = websocket.receive_json()
+
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(first["client_id"], client_id)
+        history = self.client.get(
+            f"/api/v1/chats/{chat['id']}/messages",
+            headers=headers,
+        ).json()
+        self.assertEqual(len(history["items"]), 1)
 
 
 if __name__ == "__main__":

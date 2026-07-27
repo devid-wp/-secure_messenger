@@ -50,6 +50,7 @@ class MessageResponse(BaseModel):
     chat_id: int
     sender: str
     content: str
+    client_id: str | None
     timestamp: datetime
 
 
