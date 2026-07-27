@@ -51,3 +51,9 @@ class MessageResponse(BaseModel):
     sender: str
     content: str
     timestamp: datetime
+
+
+class MessagePage(BaseModel):
+    items: list[MessageResponse]
+    next_cursor: str | None
+    has_more: bool

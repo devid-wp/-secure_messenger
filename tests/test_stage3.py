@@ -99,6 +99,62 @@ class DirectMessagesApiTests(unittest.TestCase):
         self.assertEqual([chat["id"] for chat in alice_chats.json()], [first.json()["id"]])
         self.assertEqual(charlie_chats.json(), [])
 
+    def test_message_history_uses_chat_bound_cursor_pagination(self) -> None:
+        alice_token = self.register_and_login("alice")
+        self.register_and_login("bob")
+        self.register_and_login("charlie")
+        headers = self.headers(alice_token)
+        chat = self.client.post(
+            "/api/v1/chats/dm",
+            json={"login": "bob"},
+            headers=headers,
+        ).json()
+
+        with self.client.websocket_connect(
+            "/api/v1/realtime/ws",
+            subprotocols=[f"bearer.{alice_token}"],
+        ) as websocket:
+            for number in range(5):
+                websocket.send_json(
+                    {"chat_id": chat["id"], "text": f"message-{number}"}
+                )
+                websocket.receive_json()
+
+        first = self.client.get(
+            f"/api/v1/chats/{chat['id']}/messages",
+            params={"limit": 2},
+            headers=headers,
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(
+            [item["content"] for item in first.json()["items"]],
+            ["message-3", "message-4"],
+        )
+        self.assertTrue(first.json()["has_more"])
+
+        second = self.client.get(
+            f"/api/v1/chats/{chat['id']}/messages",
+            params={"limit": 2, "cursor": first.json()["next_cursor"]},
+            headers=headers,
+        )
+        self.assertEqual(
+            [item["content"] for item in second.json()["items"]],
+            ["message-1", "message-2"],
+        )
+        self.assertTrue(second.json()["has_more"])
+
+        other_chat = self.client.post(
+            "/api/v1/chats/dm",
+            json={"login": "charlie"},
+            headers=headers,
+        ).json()
+        invalid = self.client.get(
+            f"/api/v1/chats/{other_chat['id']}/messages",
+            params={"cursor": first.json()["next_cursor"]},
+            headers=headers,
+        )
+        self.assertEqual(invalid.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

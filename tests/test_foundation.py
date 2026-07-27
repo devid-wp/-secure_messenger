@@ -275,7 +275,7 @@ class VersionedApiSmokeTests(unittest.TestCase):
             headers=alice_headers,
         )
         self.assertEqual(messages.status_code, 200)
-        self.assertEqual(messages.json()[0]["content"], "hello")
+        self.assertEqual(messages.json()["items"][0]["content"], "hello")
 
         paths = self.client.get("/openapi.json").json()["paths"]
         self.assertIn("/api/v1/auth/login", paths)
