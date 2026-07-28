@@ -19,5 +19,6 @@ def serialize_message(message: Message) -> dict:
         "sender": message.sender.login,
         "content": message.content,
         "client_id": message.client_id,
+        "server_seq": message.server_seq,
         "timestamp": message.timestamp,
     }

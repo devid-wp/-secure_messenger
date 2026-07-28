@@ -51,6 +51,7 @@ class MessageResponse(BaseModel):
     sender: str
     content: str
     client_id: str | None
+    server_seq: int
     timestamp: datetime
 
 

@@ -183,11 +183,36 @@ class DirectMessagesApiTests(unittest.TestCase):
 
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(first["client_id"], client_id)
+        self.assertEqual(first["server_seq"], 1)
         history = self.client.get(
             f"/api/v1/chats/{chat['id']}/messages",
             headers=headers,
         ).json()
         self.assertEqual(len(history["items"]), 1)
+
+    def test_server_sequence_is_monotonic_per_chat(self) -> None:
+        token = self.register_and_login("alice")
+        self.register_and_login("bob")
+        chat = self.client.post(
+            "/api/v1/chats/dm",
+            json={"login": "bob"},
+            headers=self.headers(token),
+        ).json()
+        with self.client.websocket_connect(
+            "/api/v1/realtime/ws",
+            subprotocols=[f"bearer.{token}"],
+        ) as websocket:
+            sequences = []
+            for text in ("one", "two", "three"):
+                websocket.send_json(
+                    {
+                        "chat_id": chat["id"],
+                        "text": text,
+                        "client_id": str(uuid4()),
+                    }
+                )
+                sequences.append(websocket.receive_json()["server_seq"])
+        self.assertEqual(sequences, [1, 2, 3])
 
 
 if __name__ == "__main__":

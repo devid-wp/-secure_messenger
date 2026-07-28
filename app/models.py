@@ -117,6 +117,12 @@ class Chat(Base):
         unique=True,
         index=True,
     )
+    next_message_seq: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+    )
     created_by_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
@@ -182,6 +188,11 @@ class Message(Base):
             "client_id",
             name="uq_messages_sender_client_id",
         ),
+        UniqueConstraint(
+            "chat_id",
+            "server_seq",
+            name="uq_messages_chat_server_seq",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -195,6 +206,7 @@ class Message(Base):
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     client_id: Mapped[Optional[str]] = mapped_column(String(36))
+    server_seq: Mapped[int] = mapped_column(Integer, nullable=False)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

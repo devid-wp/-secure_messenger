@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.models import ChatMember, Message, User
+from app.models import Chat, ChatMember, Message, User
 from app.services.serializers import serialize_message
 
 
@@ -83,11 +83,24 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
                 is_new_message = message is None
                 if message is None:
+                    chat = await session.scalar(
+                        select(Chat)
+                        .where(Chat.id == chat_id)
+                        .with_for_update()
+                    )
+                    if chat is None:
+                        await websocket.send_json(
+                            {"type": "error", "detail": "Chat not found"}
+                        )
+                        continue
+                    server_seq = chat.next_message_seq
+                    chat.next_message_seq += 1
                     message = Message(
                         chat_id=chat_id,
                         sender_user_id=user_id,
                         content=text.strip(),
                         client_id=client_id,
+                        server_seq=server_seq,
                     )
                     session.add(message)
                     try:
