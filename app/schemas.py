@@ -57,9 +57,15 @@ class MessageResponse(BaseModel):
     reply_to_sender: str | None
     reply_to_content: str | None
     timestamp: datetime
+    edited_at: datetime | None
+    deleted_at: datetime | None
 
 
 class MessagePage(BaseModel):
     items: list[MessageResponse]
     next_cursor: str | None
     has_more: bool
+
+
+class MessageEditRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=16384)

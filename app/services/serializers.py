@@ -38,4 +38,6 @@ def serialize_message(message: Message, viewer_user_id: int | None = None) -> di
             message.reply_to.content if message.reply_to else None
         ),
         "timestamp": message.timestamp,
+        "edited_at": message.edited_at,
+        "deleted_at": message.deleted_at,
     }

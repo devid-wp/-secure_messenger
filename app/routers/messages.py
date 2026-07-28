@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_current_user, get_db
 from app.models import ChatMember, Message, User
-from app.schemas import MessagePage
+from app.schemas import MessageEditRequest, MessagePage, MessageResponse
 from app.services.cursors import (
     InvalidCursor,
     decode_message_cursor,
@@ -15,6 +17,14 @@ from app.services.serializers import serialize_message
 
 
 router = APIRouter(prefix="/chats", tags=["messages"])
+
+
+def _message_options():
+    return (
+        selectinload(Message.sender),
+        selectinload(Message.receipts),
+        selectinload(Message.reply_to).selectinload(Message.sender),
+    )
 
 
 @router.get("/{chat_id}/messages", response_model=MessagePage)
@@ -41,11 +51,7 @@ async def list_messages(
     rows = (
         await session.scalars(
             statement
-            .options(
-                selectinload(Message.sender),
-                selectinload(Message.receipts),
-                selectinload(Message.reply_to).selectinload(Message.sender),
-            )
+            .options(*_message_options())
             .order_by(Message.id.desc())
             .limit(limit + 1)
         )
@@ -65,3 +71,90 @@ async def list_messages(
         "next_cursor": next_cursor,
         "has_more": has_more,
     }
+
+
+@router.patch(
+    "/{chat_id}/messages/{server_seq}",
+    response_model=MessageResponse,
+)
+async def edit_message(
+    chat_id: int,
+    server_seq: int,
+    request_body: MessageEditRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    message = await session.scalar(
+        select(Message)
+        .where(
+            Message.chat_id == chat_id,
+            Message.server_seq == server_seq,
+        )
+        .options(*_message_options())
+    )
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if message.sender_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only the sender can edit")
+    if message.deleted_at is not None:
+        raise HTTPException(status_code=409, detail="Message is deleted")
+    message.content = request_body.content.strip()
+    if not message.content:
+        raise HTTPException(status_code=400, detail="Message cannot be blank")
+    message.edited_at = datetime.now(timezone.utc)
+    await session.commit()
+    message = await session.scalar(
+        select(Message).where(Message.id == message.id).options(*_message_options())
+    )
+    serialized = serialize_message(message, current_user.id)
+    serialized["timestamp"] = message.timestamp.isoformat()
+    serialized["edited_at"] = message.edited_at.isoformat()
+    member_ids = set(
+        await session.scalars(
+            select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)
+        )
+    )
+    await request.app.state.connection_manager.broadcast(
+        member_ids,
+        {"type": "message_updated", **serialized},
+    )
+    return serialized
+
+
+@router.delete("/{chat_id}/messages/{server_seq}", status_code=204)
+async def delete_message(
+    chat_id: int,
+    server_seq: int,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    message = await session.scalar(
+        select(Message).where(
+            Message.chat_id == chat_id,
+            Message.server_seq == server_seq,
+        )
+    )
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if message.sender_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only the sender can delete")
+    if message.deleted_at is None:
+        message.content = ""
+        message.deleted_at = datetime.now(timezone.utc)
+        await session.commit()
+    member_ids = set(
+        await session.scalars(
+            select(ChatMember.user_id).where(ChatMember.chat_id == chat_id)
+        )
+    )
+    await request.app.state.connection_manager.broadcast(
+        member_ids,
+        {
+            "type": "message_deleted",
+            "chat_id": chat_id,
+            "server_seq": server_seq,
+            "deleted_at": message.deleted_at.isoformat(),
+        },
+    )

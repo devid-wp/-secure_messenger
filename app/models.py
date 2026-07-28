@@ -179,7 +179,8 @@ class Message(Base):
     __tablename__ = "messages"
     __table_args__ = (
         CheckConstraint(
-            "length(content) BETWEEN 1 AND 16384",
+            "(deleted_at IS NOT NULL AND content = '') OR "
+            "(deleted_at IS NULL AND length(content) BETWEEN 1 AND 16384)",
             name="content_length",
         ),
         Index("ix_messages_chat_timestamp", "chat_id", "timestamp", "id"),
@@ -215,6 +216,8 @@ class Message(Base):
         nullable=False,
         server_default=func.now(),
     )
+    edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     chat: Mapped[Chat] = relationship(back_populates="messages")
     sender: Mapped[User] = relationship()

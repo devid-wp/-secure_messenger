@@ -118,7 +118,7 @@ class FoundationMigrationTests(unittest.TestCase):
                 connection.execute(
                     "SELECT version_num FROM alembic_version"
                 ).fetchone()[0],
-                "20260728_07",
+                "20260728_08",
             )
             self.assertEqual(
                 connection.execute("PRAGMA foreign_key_check").fetchall(),

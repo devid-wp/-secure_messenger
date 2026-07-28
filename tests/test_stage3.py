@@ -310,6 +310,55 @@ class DirectMessagesApiTests(unittest.TestCase):
         self.assertEqual(reply["reply_to_sender"], "alice")
         self.assertEqual(reply["reply_to_content"], "original")
 
+    def test_sender_can_edit_and_soft_delete_message(self) -> None:
+        alice_token = self.register_and_login("alice")
+        bob_token = self.register_and_login("bob")
+        chat = self.client.post(
+            "/api/v1/chats/dm",
+            json={"login": "bob"},
+            headers=self.headers(alice_token),
+        ).json()
+        with self.client.websocket_connect(
+            "/api/v1/realtime/ws",
+            subprotocols=[f"bearer.{alice_token}"],
+        ) as websocket:
+            websocket.send_json(
+                {
+                    "chat_id": chat["id"],
+                    "text": "before",
+                    "client_id": str(uuid4()),
+                }
+            )
+            message = websocket.receive_json()
+
+        forbidden = self.client.patch(
+            f"/api/v1/chats/{chat['id']}/messages/{message['server_seq']}",
+            json={"content": "hijacked"},
+            headers=self.headers(bob_token),
+        )
+        self.assertEqual(forbidden.status_code, 403)
+
+        edited = self.client.patch(
+            f"/api/v1/chats/{chat['id']}/messages/{message['server_seq']}",
+            json={"content": "after"},
+            headers=self.headers(alice_token),
+        )
+        self.assertEqual(edited.status_code, 200, edited.text)
+        self.assertEqual(edited.json()["content"], "after")
+        self.assertIsNotNone(edited.json()["edited_at"])
+
+        deleted = self.client.delete(
+            f"/api/v1/chats/{chat['id']}/messages/{message['server_seq']}",
+            headers=self.headers(alice_token),
+        )
+        self.assertEqual(deleted.status_code, 204, deleted.text)
+        history = self.client.get(
+            f"/api/v1/chats/{chat['id']}/messages",
+            headers=self.headers(alice_token),
+        ).json()["items"]
+        self.assertEqual(history[0]["content"], "")
+        self.assertIsNotNone(history[0]["deleted_at"])
+
 
 if __name__ == "__main__":
     unittest.main()
