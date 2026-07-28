@@ -178,10 +178,16 @@ class DirectMessagesApiTests(unittest.TestCase):
         ) as websocket:
             websocket.send_json(payload)
             first = websocket.receive_json()
+
+        with self.client.websocket_connect(
+            "/api/v1/realtime/ws",
+            subprotocols=[f"bearer.{alice_token}"],
+        ) as websocket:
             websocket.send_json(payload)
             second = websocket.receive_json()
 
         self.assertEqual(first["id"], second["id"])
+        self.assertEqual(first["server_seq"], second["server_seq"])
         self.assertEqual(first["client_id"], client_id)
         self.assertEqual(first["server_seq"], 1)
         history = self.client.get(
