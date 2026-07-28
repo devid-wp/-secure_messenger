@@ -44,6 +44,7 @@ async def list_messages(
             .options(
                 selectinload(Message.sender),
                 selectinload(Message.receipts),
+                selectinload(Message.reply_to).selectinload(Message.sender),
             )
             .order_by(Message.id.desc())
             .limit(limit + 1)

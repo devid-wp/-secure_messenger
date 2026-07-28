@@ -107,11 +107,20 @@ async def websocket_endpoint(websocket: WebSocket):
                 chat_id = payload["chat_id"]
                 text = payload["text"]
                 raw_client_id = payload.get("client_id") or str(uuid4())
+                reply_to_server_seq = payload.get("reply_to_server_seq")
                 if isinstance(chat_id, bool) or not isinstance(chat_id, int):
                     raise ValueError
                 if not isinstance(text, str) or not text.strip():
                     raise ValueError
                 client_id = str(UUID(raw_client_id))
+                if (
+                    reply_to_server_seq is not None
+                    and (
+                        isinstance(reply_to_server_seq, bool)
+                        or not isinstance(reply_to_server_seq, int)
+                    )
+                ):
+                    raise ValueError
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 await websocket.send_json(
                     {"type": "error", "detail": "Invalid message payload"}
@@ -134,10 +143,28 @@ async def websocket_endpoint(websocket: WebSocket):
                     .options(
                         selectinload(Message.sender),
                         selectinload(Message.receipts),
+                        selectinload(Message.reply_to).selectinload(Message.sender),
                     )
                 )
+                reply_to = None
+                if reply_to_server_seq is not None:
+                    reply_to = await session.scalar(
+                        select(Message).where(
+                            Message.chat_id == chat_id,
+                            Message.server_seq == reply_to_server_seq,
+                        )
+                    )
+                    if reply_to is None:
+                        await websocket.send_json(
+                            {"type": "error", "detail": "Reply target not found"}
+                        )
+                        continue
                 if message is not None and (
-                    message.chat_id != chat_id or message.content != text.strip()
+                    message.chat_id != chat_id
+                    or message.content != text.strip()
+                    or message.reply_to_id != (
+                        reply_to.id if reply_to is not None else None
+                    )
                 ):
                     await websocket.send_json(
                         {"type": "error", "detail": "client_id already used"}
@@ -163,6 +190,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         content=text.strip(),
                         client_id=client_id,
                         server_seq=server_seq,
+                        reply_to_id=reply_to.id if reply_to else None,
                     )
                     session.add(message)
                     try:
@@ -179,11 +207,17 @@ async def websocket_endpoint(websocket: WebSocket):
                         .options(
                             selectinload(Message.sender),
                             selectinload(Message.receipts),
+                            selectinload(Message.reply_to).selectinload(
+                                Message.sender
+                            ),
                         )
                     )
                     if message is None or (
                         message.chat_id != chat_id
                         or message.content != text.strip()
+                        or message.reply_to_id != (
+                            reply_to.id if reply_to is not None else None
+                        )
                     ):
                         await websocket.send_json(
                             {"type": "error", "detail": "client_id already used"}

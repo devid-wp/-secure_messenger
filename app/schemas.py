@@ -53,6 +53,9 @@ class MessageResponse(BaseModel):
     client_id: str | None
     server_seq: int
     status: str
+    reply_to_server_seq: int | None
+    reply_to_sender: str | None
+    reply_to_content: str | None
     timestamp: datetime
 
 

@@ -277,6 +277,39 @@ class DirectMessagesApiTests(unittest.TestCase):
         ).json()
         self.assertEqual(history["items"][0]["status"], "read")
 
+    def test_message_can_reply_to_message_in_same_chat(self) -> None:
+        alice_token = self.register_and_login("alice")
+        self.register_and_login("bob")
+        chat = self.client.post(
+            "/api/v1/chats/dm",
+            json={"login": "bob"},
+            headers=self.headers(alice_token),
+        ).json()
+        with self.client.websocket_connect(
+            "/api/v1/realtime/ws",
+            subprotocols=[f"bearer.{alice_token}"],
+        ) as websocket:
+            websocket.send_json(
+                {
+                    "chat_id": chat["id"],
+                    "text": "original",
+                    "client_id": str(uuid4()),
+                }
+            )
+            original = websocket.receive_json()
+            websocket.send_json(
+                {
+                    "chat_id": chat["id"],
+                    "text": "reply",
+                    "client_id": str(uuid4()),
+                    "reply_to_server_seq": original["server_seq"],
+                }
+            )
+            reply = websocket.receive_json()
+        self.assertEqual(reply["reply_to_server_seq"], original["server_seq"])
+        self.assertEqual(reply["reply_to_sender"], "alice")
+        self.assertEqual(reply["reply_to_content"], "original")
+
 
 if __name__ == "__main__":
     unittest.main()

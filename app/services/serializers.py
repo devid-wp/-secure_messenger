@@ -28,5 +28,14 @@ def serialize_message(message: Message, viewer_user_id: int | None = None) -> di
         "client_id": message.client_id,
         "server_seq": message.server_seq,
         "status": status,
+        "reply_to_server_seq": (
+            message.reply_to.server_seq if message.reply_to else None
+        ),
+        "reply_to_sender": (
+            message.reply_to.sender.login if message.reply_to else None
+        ),
+        "reply_to_content": (
+            message.reply_to.content if message.reply_to else None
+        ),
         "timestamp": message.timestamp,
     }

@@ -207,6 +207,9 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     client_id: Mapped[Optional[str]] = mapped_column(String(36))
     server_seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    reply_to_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("messages.id", ondelete="RESTRICT")
+    )
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -215,6 +218,10 @@ class Message(Base):
 
     chat: Mapped[Chat] = relationship(back_populates="messages")
     sender: Mapped[User] = relationship()
+    reply_to: Mapped[Optional["Message"]] = relationship(
+        remote_side="Message.id",
+        foreign_keys=[reply_to_id],
+    )
     receipts: Mapped[list["MessageReceipt"]] = relationship(
         back_populates="message",
         cascade="all, delete-orphan",
