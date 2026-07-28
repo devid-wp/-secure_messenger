@@ -84,6 +84,7 @@ function ChatApp({ token, login, onLogout }) {
   const [messages, setMessages] = useState([])
   const [nextCursor, setNextCursor] = useState(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const [replyingTo, setReplyingTo] = useState(null)
   const [inputText, setInputText] = useState('')
   const [error, setError] = useState('')
   const [wsReady, setWsReady] = useState(false)
@@ -301,6 +302,7 @@ function ChatApp({ token, login, onLogout }) {
             chat_id: pending.chat_id,
             text: pending.content,
             client_id: pending.client_id,
+            reply_to_server_seq: pending.reply_to_server_seq,
           }))
         }
         setHistoryRefresh((value) => value + 1)
@@ -340,6 +342,24 @@ function ChatApp({ token, login, onLogout }) {
           }
           if (data.type === 'message_status') {
             updateMessageStatus(data.client_id, data.status)
+            return
+          }
+          if (data.type === 'message_updated') {
+            setMessages((previous) => previous.map((message) => (
+              message.chat_id === data.chat_id
+              && message.server_seq === data.server_seq
+                ? { ...message, ...data }
+                : message
+            )))
+            return
+          }
+          if (data.type === 'message_deleted') {
+            setMessages((previous) => previous.map((message) => (
+              message.chat_id === data.chat_id
+              && message.server_seq === data.server_seq
+                ? { ...message, content: '', deleted_at: data.deleted_at }
+                : message
+            )))
             return
           }
           if (data.type === 'message') {
@@ -453,6 +473,9 @@ function ChatApp({ token, login, onLogout }) {
       server_seq: null,
       timestamp: new Date().toISOString(),
       status: 'sending',
+      reply_to_server_seq: replyingTo?.server_seq ?? null,
+      reply_to_sender: replyingTo?.sender ?? null,
+      reply_to_content: replyingTo?.content ?? null,
     }
     outboxRef.current = [...outboxRef.current, pendingMessage]
     writeOutbox(login, outboxRef.current)
@@ -463,6 +486,7 @@ function ChatApp({ token, login, onLogout }) {
         chat_id: selectedChatId,
         text,
         client_id: clientId,
+        reply_to_server_seq: replyingTo?.server_seq ?? null,
       }))
     }
     window.setTimeout(() => {
@@ -475,7 +499,45 @@ function ChatApp({ token, login, onLogout }) {
       }
     }, 10000)
     setInputText('')
+    setReplyingTo(null)
     inputRef.current?.focus()
+  }
+
+  const editMessage = async (message) => {
+    const content = window.prompt('Изменить сообщение', message.content)
+    if (!content?.trim() || content.trim() === message.content) return
+    const response = await fetch(
+      `${API_URL}/api/v1/chats/${message.chat_id}/messages/${message.server_seq}`,
+      {
+        method: 'PATCH',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: content.trim() }),
+      }
+    )
+    if (!response.ok) setError('Не удалось изменить сообщение')
+  }
+
+  const deleteMessage = async (message) => {
+    if (!window.confirm('Удалить сообщение?')) return
+    const response = await fetch(
+      `${API_URL}/api/v1/chats/${message.chat_id}/messages/${message.server_seq}`,
+      { method: 'DELETE', headers: authHeaders }
+    )
+    if (!response.ok) setError('Не удалось удалить сообщение')
+  }
+
+  const blockSelectedUser = async () => {
+    const otherLogin = selectedConversation?.label
+    if (!otherLogin || !window.confirm(`Заблокировать ${otherLogin}?`)) return
+    const response = await fetch(
+      `${API_URL}/api/v1/users/${encodeURIComponent(otherLogin)}/block`,
+      { method: 'POST', headers: authHeaders }
+    )
+    if (response.ok) {
+      setError(`Пользователь ${otherLogin} заблокирован`)
+    } else {
+      setError('Не удалось заблокировать пользователя')
+    }
   }
 
   const handleLogout = () => {
@@ -560,6 +622,15 @@ function ChatApp({ token, login, onLogout }) {
           <div className="chat-header__meta">
             <span className={`status-dot ${wsReady ? 'online' : 'offline'}`} />
             <span>{wsReady ? 'в сети' : 'подключение...'}</span>
+            {selectedConversation && (
+              <button
+                type="button"
+                className="header-action"
+                onClick={blockSelectedUser}
+              >
+                Заблокировать
+              </button>
+            )}
           </div>
         </header>
 
@@ -594,11 +665,48 @@ function ChatApp({ token, login, onLogout }) {
               >
                 {!own && <Avatar name={message.sender} size={40} />}
                 <div className="message__body">
+                  {message.reply_to_server_seq && (
+                    <div className="message__reply">
+                      <strong>{message.reply_to_sender}</strong>
+                      <span>
+                        {message.reply_to_content || 'Сообщение удалено'}
+                      </span>
+                    </div>
+                  )}
                   <div className="message__bubble">
-                    <span className="message__text">{message.content}</span>
+                    <span className="message__text">
+                      {message.deleted_at ? 'Сообщение удалено' : message.content}
+                    </span>
                   </div>
+                  {!message.deleted_at && message.server_seq && (
+                    <div className="message__actions">
+                      <button
+                        type="button"
+                        onClick={() => setReplyingTo(message)}
+                      >
+                        Ответить
+                      </button>
+                      {own && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => editMessage(message)}
+                          >
+                            Изменить
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteMessage(message)}
+                          >
+                            Удалить
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
                   <span className="message__time">
                     {messageTime(message.timestamp)}
+                    {message.edited_at && !message.deleted_at && ' · изменено'}
                     {own && message.status && (
                       <span className={`message__status message__status--${message.status}`}>
                         {' · '}
@@ -613,6 +721,15 @@ function ChatApp({ token, login, onLogout }) {
           <div ref={messagesEndRef} />
         </div>
 
+        {replyingTo && (
+          <div className="reply-composer">
+            <span>
+              Ответ для <strong>{replyingTo.sender}</strong>:{' '}
+              {replyingTo.content}
+            </span>
+            <button type="button" onClick={() => setReplyingTo(null)}>×</button>
+          </div>
+        )}
         <form className="message-input-form" onSubmit={sendMessage}>
           <button
             type="button"
