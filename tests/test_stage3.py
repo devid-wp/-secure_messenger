@@ -359,6 +359,55 @@ class DirectMessagesApiTests(unittest.TestCase):
         self.assertEqual(history[0]["content"], "")
         self.assertIsNotNone(history[0]["deleted_at"])
 
+    def test_blocking_hides_search_and_stops_existing_dm(self) -> None:
+        alice_token = self.register_and_login("alice")
+        bob_token = self.register_and_login("bob")
+        chat = self.client.post(
+            "/api/v1/chats/dm",
+            json={"login": "bob"},
+            headers=self.headers(alice_token),
+        ).json()
+
+        blocked = self.client.post(
+            "/api/v1/users/bob/block",
+            headers=self.headers(alice_token),
+        )
+        self.assertEqual(blocked.status_code, 204, blocked.text)
+        search = self.client.get(
+            "/api/v1/users/search",
+            params={"q": "ali"},
+            headers=self.headers(bob_token),
+        )
+        self.assertEqual(search.json(), [])
+        blocked_dm = self.client.post(
+            "/api/v1/chats/dm",
+            json={"login": "alice"},
+            headers=self.headers(bob_token),
+        )
+        self.assertEqual(blocked_dm.status_code, 403)
+
+        with self.client.websocket_connect(
+            "/api/v1/realtime/ws",
+            subprotocols=[f"bearer.{bob_token}"],
+        ) as websocket:
+            websocket.send_json(
+                {
+                    "chat_id": chat["id"],
+                    "text": "must not send",
+                    "client_id": str(uuid4()),
+                }
+            )
+            self.assertEqual(
+                websocket.receive_json()["detail"],
+                "Messaging is blocked",
+            )
+
+        unblocked = self.client.delete(
+            "/api/v1/users/bob/block",
+            headers=self.headers(alice_token),
+        )
+        self.assertEqual(unblocked.status_code, 204)
+
 
 if __name__ == "__main__":
     unittest.main()

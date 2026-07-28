@@ -99,6 +99,31 @@ class Device(Base):
     user: Mapped[User] = relationship(back_populates="devices")
 
 
+class UserBlock(Base):
+    __tablename__ = "user_blocks"
+    __table_args__ = (
+        CheckConstraint("blocker_id <> blocked_id", name="different_users"),
+    )
+
+    blocker_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    blocked_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    blocker: Mapped[User] = relationship(foreign_keys=[blocker_id])
+    blocked: Mapped[User] = relationship(foreign_keys=[blocked_id])
+
+
 class Chat(Base):
     __tablename__ = "chats"
     __table_args__ = (

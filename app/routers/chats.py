@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_current_user, get_db
-from app.models import Chat, ChatMember, User
+from app.models import Chat, ChatMember, User, UserBlock
 from app.schemas import ChatResponse, DirectChatRequest
 from app.services.serializers import serialize_chat
 
@@ -74,6 +74,22 @@ async def create_direct_chat(
         raise HTTPException(status_code=404, detail="User not found")
     if other_user.id == current_user.id:
         raise HTTPException(status_code=400, detail="Invalid chat participant")
+    block = await session.scalar(
+        select(UserBlock).where(
+            or_(
+                and_(
+                    UserBlock.blocker_id == current_user.id,
+                    UserBlock.blocked_id == other_user.id,
+                ),
+                and_(
+                    UserBlock.blocker_id == other_user.id,
+                    UserBlock.blocked_id == current_user.id,
+                ),
+            )
+        )
+    )
+    if block is not None:
+        raise HTTPException(status_code=403, detail="Direct messages are blocked")
 
     direct_key = f"{min(current_user.id, other_user.id)}:{max(current_user.id, other_user.id)}"
     chat = await session.scalar(

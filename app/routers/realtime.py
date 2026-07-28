@@ -4,11 +4,18 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.models import Chat, ChatMember, Message, MessageReceipt, User
+from app.models import (
+    Chat,
+    ChatMember,
+    Message,
+    MessageReceipt,
+    User,
+    UserBlock,
+)
 from app.services.serializers import serialize_message
 
 
@@ -132,6 +139,33 @@ async def websocket_endpoint(websocket: WebSocket):
                 if membership is None:
                     await websocket.send_json(
                         {"type": "error", "detail": "Chat not found"}
+                    )
+                    continue
+                other_member_ids = list(
+                    await session.scalars(
+                        select(ChatMember.user_id).where(
+                            ChatMember.chat_id == chat_id,
+                            ChatMember.user_id != user_id,
+                        )
+                    )
+                )
+                blocked = await session.scalar(
+                    select(UserBlock).where(
+                        or_(
+                            and_(
+                                UserBlock.blocker_id == user_id,
+                                UserBlock.blocked_id.in_(other_member_ids),
+                            ),
+                            and_(
+                                UserBlock.blocked_id == user_id,
+                                UserBlock.blocker_id.in_(other_member_ids),
+                            ),
+                        )
+                    )
+                )
+                if blocked is not None:
+                    await websocket.send_json(
+                        {"type": "error", "detail": "Messaging is blocked"}
                     )
                     continue
                 message = await session.scalar(
