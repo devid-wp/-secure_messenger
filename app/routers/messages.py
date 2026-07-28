@@ -41,7 +41,10 @@ async def list_messages(
     rows = (
         await session.scalars(
             statement
-            .options(selectinload(Message.sender))
+            .options(
+                selectinload(Message.sender),
+                selectinload(Message.receipts),
+            )
             .order_by(Message.id.desc())
             .limit(limit + 1)
         )
@@ -55,7 +58,8 @@ async def list_messages(
     )
     return {
         "items": [
-            serialize_message(message) for message in reversed(page_rows)
+            serialize_message(message, current_user.id)
+            for message in reversed(page_rows)
         ],
         "next_cursor": next_cursor,
         "has_more": has_more,

@@ -215,3 +215,37 @@ class Message(Base):
 
     chat: Mapped[Chat] = relationship(back_populates="messages")
     sender: Mapped[User] = relationship()
+    receipts: Mapped[list["MessageReceipt"]] = relationship(
+        back_populates="message",
+        cascade="all, delete-orphan",
+    )
+
+
+class MessageReceipt(Base):
+    __tablename__ = "message_receipts"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('delivered', 'read')",
+            name="status",
+        ),
+    )
+
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    delivered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    message: Mapped[Message] = relationship(back_populates="receipts")
+    user: Mapped[User] = relationship()

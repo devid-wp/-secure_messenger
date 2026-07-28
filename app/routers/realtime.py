@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -7,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.models import Chat, ChatMember, Message, User
+from app.models import Chat, ChatMember, Message, MessageReceipt, User
 from app.services.serializers import serialize_message
 
 
@@ -45,6 +46,64 @@ async def websocket_endpoint(websocket: WebSocket):
             raw = await websocket.receive_text()
             try:
                 payload = json.loads(raw)
+                event_type = payload.get("type", "send_message")
+                if event_type in {"delivered", "read"}:
+                    chat_id = payload["chat_id"]
+                    server_seq = payload["server_seq"]
+                    if (
+                        isinstance(chat_id, bool)
+                        or not isinstance(chat_id, int)
+                        or isinstance(server_seq, bool)
+                        or not isinstance(server_seq, int)
+                    ):
+                        raise ValueError
+                    async with websocket.app.state.session_factory() as session:
+                        membership = await session.get(
+                            ChatMember,
+                            (chat_id, user_id),
+                        )
+                        message = await session.scalar(
+                            select(Message).where(
+                                Message.chat_id == chat_id,
+                                Message.server_seq == server_seq,
+                            )
+                        )
+                        if (
+                            membership is None
+                            or message is None
+                            or message.sender_user_id == user_id
+                        ):
+                            raise ValueError
+                        receipt = await session.get(
+                            MessageReceipt,
+                            (message.id, user_id),
+                        )
+                        now = datetime.now(timezone.utc)
+                        if receipt is None:
+                            receipt = MessageReceipt(
+                                message_id=message.id,
+                                user_id=user_id,
+                                status=event_type,
+                                delivered_at=now,
+                                read_at=now if event_type == "read" else None,
+                            )
+                            session.add(receipt)
+                        elif event_type == "read":
+                            receipt.status = "read"
+                            receipt.read_at = receipt.read_at or now
+                        await session.commit()
+                        status_event = {
+                            "type": "message_status",
+                            "chat_id": chat_id,
+                            "server_seq": server_seq,
+                            "client_id": message.client_id,
+                            "status": receipt.status,
+                        }
+                        sender_user_id = message.sender_user_id
+                    await manager.broadcast({sender_user_id}, status_event)
+                    continue
+                if event_type != "send_message":
+                    raise ValueError
                 chat_id = payload["chat_id"]
                 text = payload["text"]
                 raw_client_id = payload.get("client_id") or str(uuid4())
@@ -72,7 +131,10 @@ async def websocket_endpoint(websocket: WebSocket):
                         Message.sender_user_id == user_id,
                         Message.client_id == client_id,
                     )
-                    .options(selectinload(Message.sender))
+                    .options(
+                        selectinload(Message.sender),
+                        selectinload(Message.receipts),
+                    )
                 )
                 if message is not None and (
                     message.chat_id != chat_id or message.content != text.strip()
@@ -114,7 +176,10 @@ async def websocket_endpoint(websocket: WebSocket):
                             Message.sender_user_id == user_id,
                             Message.client_id == client_id,
                         )
-                        .options(selectinload(Message.sender))
+                        .options(
+                            selectinload(Message.sender),
+                            selectinload(Message.receipts),
+                        )
                     )
                     if message is None or (
                         message.chat_id != chat_id
@@ -133,10 +198,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 )
                 serialized = serialize_message(message)
                 serialized["timestamp"] = message.timestamp.isoformat()
-            await manager.broadcast(
-                member_ids if is_new_message else {user_id},
-                {"type": "message", **serialized},
-            )
+            await websocket.send_json({"type": "message_ack", **serialized})
+            if is_new_message:
+                await manager.broadcast(
+                    member_ids - {user_id},
+                    {"type": "message", **serialized},
+                )
     except WebSocketDisconnect:
         pass
     except Exception:

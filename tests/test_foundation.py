@@ -118,7 +118,7 @@ class FoundationMigrationTests(unittest.TestCase):
                 connection.execute(
                     "SELECT version_num FROM alembic_version"
                 ).fetchone()[0],
-                "20260728_05",
+                "20260728_06",
             )
             self.assertEqual(
                 connection.execute("PRAGMA foreign_key_check").fetchall(),
@@ -266,8 +266,9 @@ class VersionedApiSmokeTests(unittest.TestCase):
             alice_ws.send_json({"chat_id": chat["id"], "text": "hello"})
             alice_event = alice_ws.receive_json()
             bob_event = bob_ws.receive_json()
-        self.assertEqual(alice_event, bob_event)
-        self.assertEqual(alice_event["type"], "message")
+        self.assertEqual(alice_event["id"], bob_event["id"])
+        self.assertEqual(alice_event["type"], "message_ack")
+        self.assertEqual(bob_event["type"], "message")
         self.assertEqual(alice_event["sender"], "alice")
 
         messages = self.client.get(

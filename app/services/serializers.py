@@ -12,7 +12,14 @@ def serialize_chat(chat: Chat) -> dict:
     }
 
 
-def serialize_message(message: Message) -> dict:
+def serialize_message(message: Message, viewer_user_id: int | None = None) -> dict:
+    status = "sent"
+    if viewer_user_id == message.sender_user_id:
+        receipt_states = {receipt.status for receipt in message.receipts}
+        if "read" in receipt_states:
+            status = "read"
+        elif "delivered" in receipt_states:
+            status = "delivered"
     return {
         "id": message.id,
         "chat_id": message.chat_id,
@@ -20,5 +27,6 @@ def serialize_message(message: Message) -> dict:
         "content": message.content,
         "client_id": message.client_id,
         "server_seq": message.server_seq,
+        "status": status,
         "timestamp": message.timestamp,
     }

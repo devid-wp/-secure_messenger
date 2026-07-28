@@ -214,6 +214,63 @@ class DirectMessagesApiTests(unittest.TestCase):
                 sequences.append(websocket.receive_json()["server_seq"])
         self.assertEqual(sequences, [1, 2, 3])
 
+    def test_delivery_and_read_receipts_are_confirmed_to_sender(self) -> None:
+        alice_token = self.register_and_login("alice")
+        bob_token = self.register_and_login("bob")
+        chat = self.client.post(
+            "/api/v1/chats/dm",
+            json={"login": "bob"},
+            headers=self.headers(alice_token),
+        ).json()
+        with (
+            self.client.websocket_connect(
+                "/api/v1/realtime/ws",
+                subprotocols=[f"bearer.{alice_token}"],
+            ) as alice,
+            self.client.websocket_connect(
+                "/api/v1/realtime/ws",
+                subprotocols=[f"bearer.{bob_token}"],
+            ) as bob,
+        ):
+            alice.send_json(
+                {
+                    "type": "send_message",
+                    "chat_id": chat["id"],
+                    "text": "receipt test",
+                    "client_id": str(uuid4()),
+                }
+            )
+            sent = alice.receive_json()
+            incoming = bob.receive_json()
+            self.assertEqual(sent["type"], "message_ack")
+            self.assertEqual(sent["status"], "sent")
+
+            bob.send_json(
+                {
+                    "type": "delivered",
+                    "chat_id": chat["id"],
+                    "server_seq": incoming["server_seq"],
+                }
+            )
+            delivered = alice.receive_json()
+            self.assertEqual(delivered["status"], "delivered")
+
+            bob.send_json(
+                {
+                    "type": "read",
+                    "chat_id": chat["id"],
+                    "server_seq": incoming["server_seq"],
+                }
+            )
+            read = alice.receive_json()
+            self.assertEqual(read["status"], "read")
+
+        history = self.client.get(
+            f"/api/v1/chats/{chat['id']}/messages",
+            headers=self.headers(alice_token),
+        ).json()
+        self.assertEqual(history["items"][0]["status"], "read")
+
 
 if __name__ == "__main__":
     unittest.main()
