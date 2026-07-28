@@ -5,6 +5,18 @@ import './ChatApp.css'
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const WS_URL = API_URL.replace(/^http/, 'ws')
 
+function readOutbox(login) {
+  try {
+    return JSON.parse(localStorage.getItem(`outbox:${login}`) || '[]')
+  } catch {
+    return []
+  }
+}
+
+function writeOutbox(login, items) {
+  localStorage.setItem(`outbox:${login}`, JSON.stringify(items))
+}
+
 const AVATAR_COLORS = [
   '#5865f2', '#3ba55d', '#faa61a', '#ed4245',
   '#9b59b6', '#1abc9c', '#e67e22', '#e84393',
@@ -55,6 +67,14 @@ function messageTime(timestamp) {
   })
 }
 
+const STATUS_LABELS = {
+  sending: 'отправка…',
+  sent: 'отправлено',
+  delivered: 'доставлено',
+  read: 'прочитано',
+  failed: 'не отправлено — повтор при подключении',
+}
+
 function ChatApp({ token, login, onLogout }) {
   const { theme, toggle } = useTheme()
   const [chats, setChats] = useState([])
@@ -67,11 +87,15 @@ function ChatApp({ token, login, onLogout }) {
   const [inputText, setInputText] = useState('')
   const [error, setError] = useState('')
   const [wsReady, setWsReady] = useState(false)
+  const [historyRefresh, setHistoryRefresh] = useState(0)
   const wsRef = useRef(null)
   const selectedChatIdRef = useRef(null)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const prependingHistoryRef = useRef(false)
+  const outboxRef = useRef(readOutbox(login))
+  const reconnectTimerRef = useRef(null)
+  const readReceiptsRef = useRef(new Set())
 
   const authHeaders = useMemo(
     () => ({ Authorization: `Bearer ${token}` }),
@@ -203,7 +227,10 @@ function ChatApp({ token, login, onLogout }) {
         if (!response.ok) throw new Error('Не удалось загрузить сообщения')
         const data = await response.json()
         if (!cancelled) {
-          setMessages(data.items)
+          const pending = outboxRef.current.filter(
+            (message) => message.chat_id === selectedChatId
+          )
+          setMessages([...data.items, ...pending])
           setNextCursor(data.next_cursor)
           setError('')
         }
@@ -218,7 +245,7 @@ function ChatApp({ token, login, onLogout }) {
     return () => {
       cancelled = true
     }
-  }, [authHeaders, onLogout, selectedChatId])
+  }, [authHeaders, historyRefresh, onLogout, selectedChatId])
 
   const loadOlderMessages = async () => {
     if (!nextCursor || selectedChatId === null || loadingOlder) return
@@ -243,50 +270,132 @@ function ChatApp({ token, login, onLogout }) {
   }
 
   useEffect(() => {
-    const ws = new WebSocket(
-      `${WS_URL}/api/v1/realtime/ws`,
-      [`bearer.${token}`]
-    )
-    wsRef.current = ws
-    setWsReady(false)
+    let stopped = false
+    let reconnectAttempt = 0
 
-    ws.onopen = () => setWsReady(true)
-    ws.onclose = () => setWsReady(false)
-    ws.onerror = () => setError('WebSocket-соединение недоступно')
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data.type === 'error') {
-          setError(data.detail || 'Сообщение не отправлено')
-          return
+    const updateMessageStatus = (clientId, status, serverData = null) => {
+      setMessages((previous) => previous.map((message) => (
+        message.client_id === clientId
+          ? { ...message, ...serverData, status }
+          : message
+      )))
+    }
+
+    const connect = () => {
+      if (stopped) return
+      const ws = new WebSocket(
+        `${WS_URL}/api/v1/realtime/ws`,
+        [`bearer.${token}`]
+      )
+      wsRef.current = ws
+      setWsReady(false)
+
+      ws.onopen = () => {
+        reconnectAttempt = 0
+        setWsReady(true)
+        setError('')
+        for (const pending of outboxRef.current) {
+          updateMessageStatus(pending.client_id, 'sending')
+          ws.send(JSON.stringify({
+            type: 'send_message',
+            chat_id: pending.chat_id,
+            text: pending.content,
+            client_id: pending.client_id,
+          }))
         }
-        if (
-          data.type === 'message'
-          && data.chat_id === selectedChatIdRef.current
-        ) {
-          setMessages((previous) => {
-            if (previous.some((message) => (
-              message.id === data.id
-              || (
-                data.client_id
-                && message.client_id === data.client_id
-                && message.sender === data.sender
-              )
-            ))) return previous
-            return [...previous, data]
-          })
-          setError('')
+        setHistoryRefresh((value) => value + 1)
+      }
+
+      ws.onclose = () => {
+        if (wsRef.current === ws) wsRef.current = null
+        setWsReady(false)
+        for (const pending of outboxRef.current) {
+          updateMessageStatus(pending.client_id, 'failed')
         }
-      } catch {
-        setError('Сервер прислал некорректный ответ')
+        if (!stopped) {
+          const delay = Math.min(1000 * (2 ** reconnectAttempt), 30000)
+          reconnectAttempt += 1
+          reconnectTimerRef.current = window.setTimeout(connect, delay)
+        }
+      }
+
+      ws.onerror = () => {
+        setError('Соединение потеряно — сообщения останутся в очереди')
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type === 'error') {
+            setError(data.detail || 'Сообщение не отправлено')
+            return
+          }
+          if (data.type === 'message_ack') {
+            outboxRef.current = outboxRef.current.filter(
+              (item) => item.client_id !== data.client_id
+            )
+            writeOutbox(login, outboxRef.current)
+            updateMessageStatus(data.client_id, 'sent', data)
+            return
+          }
+          if (data.type === 'message_status') {
+            updateMessageStatus(data.client_id, data.status)
+            return
+          }
+          if (data.type === 'message') {
+            ws.send(JSON.stringify({
+              type: 'delivered',
+              chat_id: data.chat_id,
+              server_seq: data.server_seq,
+            }))
+            if (data.chat_id === selectedChatIdRef.current) {
+              ws.send(JSON.stringify({
+                type: 'read',
+                chat_id: data.chat_id,
+                server_seq: data.server_seq,
+              }))
+              setMessages((previous) => (
+                previous.some((message) => message.id === data.id)
+                  ? previous
+                  : [...previous, data]
+              ))
+            }
+            setError('')
+          }
+        } catch {
+          setError('Сервер прислал некорректный ответ')
+        }
       }
     }
 
+    connect()
     return () => {
-      ws.close()
+      stopped = true
+      window.clearTimeout(reconnectTimerRef.current)
+      wsRef.current?.close()
       wsRef.current = null
     }
   }, [token])
+
+  useEffect(() => {
+    const ws = wsRef.current
+    if (!wsReady || !ws || selectedChatId === null) return
+    for (const message of messages) {
+      const key = `${message.chat_id}:${message.server_seq}`
+      if (
+        message.sender !== login
+        && message.server_seq
+        && !readReceiptsRef.current.has(key)
+      ) {
+        readReceiptsRef.current.add(key)
+        ws.send(JSON.stringify({
+          type: 'read',
+          chat_id: message.chat_id,
+          server_seq: message.server_seq,
+        }))
+      }
+    }
+  }, [login, messages, selectedChatId, wsReady])
 
   const selectConversation = async (conversation) => {
     setError('')
@@ -330,17 +439,41 @@ function ChatApp({ token, login, onLogout }) {
     if (
       !text
       || selectedChatId === null
-      || !ws
-      || ws.readyState !== WebSocket.OPEN
     ) {
       return
     }
 
-    ws.send(JSON.stringify({
+    const clientId = crypto.randomUUID()
+    const pendingMessage = {
+      id: `pending:${clientId}`,
       chat_id: selectedChatId,
-      text,
-      client_id: crypto.randomUUID(),
-    }))
+      sender: login,
+      content: text,
+      client_id: clientId,
+      server_seq: null,
+      timestamp: new Date().toISOString(),
+      status: 'sending',
+    }
+    outboxRef.current = [...outboxRef.current, pendingMessage]
+    writeOutbox(login, outboxRef.current)
+    setMessages((previous) => [...previous, pendingMessage])
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'send_message',
+        chat_id: selectedChatId,
+        text,
+        client_id: clientId,
+      }))
+    }
+    window.setTimeout(() => {
+      if (outboxRef.current.some((item) => item.client_id === clientId)) {
+        setMessages((previous) => previous.map((message) => (
+          message.client_id === clientId
+            ? { ...message, status: 'failed' }
+            : message
+        )))
+      }
+    }, 10000)
     setInputText('')
     inputRef.current?.focus()
   }
@@ -466,6 +599,12 @@ function ChatApp({ token, login, onLogout }) {
                   </div>
                   <span className="message__time">
                     {messageTime(message.timestamp)}
+                    {own && message.status && (
+                      <span className={`message__status message__status--${message.status}`}>
+                        {' · '}
+                        {STATUS_LABELS[message.status] || message.status}
+                      </span>
+                    )}
                   </span>
                 </div>
               </div>
@@ -495,13 +634,13 @@ function ChatApp({ token, login, onLogout }) {
               }
               value={inputText}
               onChange={(event) => setInputText(event.target.value)}
-              disabled={!wsReady || selectedChatId === null}
+              disabled={selectedChatId === null}
             />
           </div>
           <button
             type="submit"
             className="icon-btn icon-btn--accent"
-            disabled={!wsReady || selectedChatId === null || !inputText.trim()}
+            disabled={selectedChatId === null || !inputText.trim()}
             title="Отправить"
             aria-label="Отправить"
           >

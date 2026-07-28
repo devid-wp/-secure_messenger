@@ -378,6 +378,14 @@
   padding: 0 4px;
 }
 
+.message__status--read {
+  color: var(--accent);
+}
+
+.message__status--failed {
+  color: var(--danger, #ed4245);
+}
+
 /* --- Input form --- */
 .message-input-form {
   padding: 12px 16px 20px;
