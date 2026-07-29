@@ -105,6 +105,28 @@
   color: var(--text-muted);
 }
 
+.channel-header button {
+  margin-top: 8px;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.invitation-item {
+  margin: 4px 8px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+}
+
 .user-search {
   padding: 8px;
 }

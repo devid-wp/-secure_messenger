@@ -30,7 +30,7 @@ function avatarColor(login) {
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length]
 }
 
-function Avatar({ name, size = 40 }) {
+function Avatar({ name, size = 40, src = null }) {
   const safeName = name || '?'
   return (
     <div
@@ -43,7 +43,7 @@ function Avatar({ name, size = 40 }) {
       }}
       aria-hidden="true"
     >
-      {safeName.charAt(0).toUpperCase()}
+      {src ? <img src={src} alt="" /> : safeName.charAt(0).toUpperCase()}
     </div>
   )
 }
@@ -85,6 +85,7 @@ function ChatApp({ token, login, onLogout }) {
   const [nextCursor, setNextCursor] = useState(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [replyingTo, setReplyingTo] = useState(null)
+  const [invitations, setInvitations] = useState([])
   const [inputText, setInputText] = useState('')
   const [error, setError] = useState('')
   const [wsReady, setWsReady] = useState(false)
@@ -115,6 +116,8 @@ function ChatApp({ token, login, onLogout }) {
         chatId: chat.id,
         label: chatTitle(chat, login),
         userLogin: null,
+        avatarUrl: chat.avatar_url,
+        type: chat.type,
       }
     })
     const newDirectChats = searchResults
@@ -124,6 +127,7 @@ function ChatApp({ token, login, onLogout }) {
         chatId: null,
         label: user.login,
         userLogin: user.login,
+        type: 'dm',
       }))
     return [...existingChats, ...newDirectChats]
   }, [chats, login, searchResults])
@@ -149,21 +153,29 @@ function ChatApp({ token, login, onLogout }) {
 
     const loadWorkspace = async () => {
       try {
-        const chatsResponse = await fetch(
-          `${API_URL}/api/v1/chats/dm`,
-          { headers: authHeaders }
-        )
-        if (chatsResponse.status === 401) {
+        const [dmResponse, groupsResponse, invitationsResponse] = await Promise.all([
+          fetch(`${API_URL}/api/v1/chats/dm`, { headers: authHeaders }),
+          fetch(`${API_URL}/api/v1/chats/groups`, { headers: authHeaders }),
+          fetch(`${API_URL}/api/v1/chats/groups/invitations/pending`, {
+            headers: authHeaders,
+          }),
+        ])
+        if (dmResponse.status === 401) {
           onLogout()
           return
         }
-        if (!chatsResponse.ok) {
+        if (!dmResponse.ok || !groupsResponse.ok || !invitationsResponse.ok) {
           throw new Error('Не удалось загрузить список чатов')
         }
 
-        const chatData = await chatsResponse.json()
+        const chatData = [
+          ...await groupsResponse.json(),
+          ...await dmResponse.json(),
+        ]
+        const invitationData = await invitationsResponse.json()
         if (cancelled) return
         setChats(chatData)
+        setInvitations(invitationData)
         setSelectedChatId((currentId) => {
           if (chatData.some((chat) => chat.id === currentId)) return currentId
           return chatData[0]?.id ?? null
@@ -540,6 +552,65 @@ function ChatApp({ token, login, onLogout }) {
     }
   }
 
+  const createGroup = async () => {
+    const name = window.prompt('Название группы')
+    if (!name?.trim()) return
+    const avatarUrl = window.prompt('URL аватара (необязательно)') || null
+    const response = await fetch(`${API_URL}/api/v1/chats/groups`, {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), avatar_url: avatarUrl }),
+    })
+    if (!response.ok) {
+      setError('Не удалось создать группу')
+      return
+    }
+    const group = await response.json()
+    setChats((previous) => [group, ...previous])
+    setSelectedChatId(group.id)
+  }
+
+  const groupMemberAction = async (action) => {
+    const loginValue = window.prompt('Логин пользователя')
+    if (!loginValue || !selectedChatId) return
+    const paths = {
+      invite: `invitations`,
+      add: `members`,
+      remove: `members/${encodeURIComponent(loginValue)}`,
+    }
+    const response = await fetch(
+      `${API_URL}/api/v1/chats/groups/${selectedChatId}/${paths[action]}`,
+      {
+        method: action === 'remove' ? 'DELETE' : 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: action === 'remove' ? undefined : JSON.stringify({ login: loginValue }),
+      }
+    )
+    setError(response.ok ? 'Группа обновлена' : 'Операция с участником не выполнена')
+    if (response.ok && action === 'add') {
+      const group = await response.json()
+      setChats((previous) => previous.map((item) => (
+        item.id === group.id ? group : item
+      )))
+    }
+  }
+
+  const acceptInvitation = async (invitation) => {
+    const response = await fetch(
+      `${API_URL}/api/v1/chats/groups/invitations/${invitation.id}/accept`,
+      { method: 'POST', headers: authHeaders }
+    )
+    if (!response.ok) {
+      setError('Не удалось принять приглашение')
+      return
+    }
+    const group = await response.json()
+    setInvitations((previous) => previous.filter(
+      (item) => item.id !== invitation.id
+    ))
+    setChats((previous) => [group, ...previous])
+  }
+
   const handleLogout = () => {
     wsRef.current?.close()
     onLogout()
@@ -556,6 +627,7 @@ function ChatApp({ token, login, onLogout }) {
       <aside className="channel-panel" aria-label="Чаты">
         <header className="channel-header">
           <h2>Secure Messenger</h2>
+          <button type="button" onClick={createGroup}>＋ группа</button>
         </header>
 
         <div className="channel-section-title">Прямые сообщения</div>
@@ -580,11 +652,26 @@ function ChatApp({ token, login, onLogout }) {
               }`}
               onClick={() => selectConversation(conversation)}
             >
-              <Avatar name={conversation.label} size={32} />
+              <Avatar
+                name={conversation.label}
+                size={32}
+                src={conversation.avatarUrl}
+              />
               <span className="channel-name">{conversation.label}</span>
             </button>
           ))}
         </nav>
+
+        {invitations.map((invitation) => (
+          <button
+            type="button"
+            className="invitation-item"
+            key={invitation.id}
+            onClick={() => acceptInvitation(invitation)}
+          >
+            Принять: {invitation.group_name}
+          </button>
+        ))}
 
         <div className="user-bar">
           <Avatar name={login} size={32} />
@@ -622,7 +709,7 @@ function ChatApp({ token, login, onLogout }) {
           <div className="chat-header__meta">
             <span className={`status-dot ${wsReady ? 'online' : 'offline'}`} />
             <span>{wsReady ? 'в сети' : 'подключение...'}</span>
-            {selectedConversation && (
+            {selectedConversation?.type === 'dm' && (
               <button
                 type="button"
                 className="header-action"
@@ -630,6 +717,19 @@ function ChatApp({ token, login, onLogout }) {
               >
                 Заблокировать
               </button>
+            )}
+            {selectedConversation?.type === 'group' && (
+              <>
+                <button type="button" className="header-action" onClick={() => groupMemberAction('invite')}>
+                  Пригласить
+                </button>
+                <button type="button" className="header-action" onClick={() => groupMemberAction('add')}>
+                  Добавить
+                </button>
+                <button type="button" className="header-action" onClick={() => groupMemberAction('remove')}>
+                  Удалить
+                </button>
+              </>
             )}
           </div>
         </header>
