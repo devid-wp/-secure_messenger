@@ -141,33 +141,37 @@ async def websocket_endpoint(websocket: WebSocket):
                         {"type": "error", "detail": "Chat not found"}
                     )
                     continue
-                other_member_ids = list(
-                    await session.scalars(
-                        select(ChatMember.user_id).where(
-                            ChatMember.chat_id == chat_id,
-                            ChatMember.user_id != user_id,
+                chat_type = await session.scalar(
+                    select(Chat.type).where(Chat.id == chat_id)
+                )
+                if chat_type == "dm":
+                    other_member_ids = list(
+                        await session.scalars(
+                            select(ChatMember.user_id).where(
+                                ChatMember.chat_id == chat_id,
+                                ChatMember.user_id != user_id,
+                            )
                         )
                     )
-                )
-                blocked = await session.scalar(
-                    select(UserBlock).where(
-                        or_(
-                            and_(
-                                UserBlock.blocker_id == user_id,
-                                UserBlock.blocked_id.in_(other_member_ids),
-                            ),
-                            and_(
-                                UserBlock.blocked_id == user_id,
-                                UserBlock.blocker_id.in_(other_member_ids),
-                            ),
+                    blocked = await session.scalar(
+                        select(UserBlock).where(
+                            or_(
+                                and_(
+                                    UserBlock.blocker_id == user_id,
+                                    UserBlock.blocked_id.in_(other_member_ids),
+                                ),
+                                and_(
+                                    UserBlock.blocked_id == user_id,
+                                    UserBlock.blocker_id.in_(other_member_ids),
+                                ),
+                            )
                         )
                     )
-                )
-                if blocked is not None:
-                    await websocket.send_json(
-                        {"type": "error", "detail": "Messaging is blocked"}
-                    )
-                    continue
+                    if blocked is not None:
+                        await websocket.send_json(
+                            {"type": "error", "detail": "Messaging is blocked"}
+                        )
+                        continue
                 message = await session.scalar(
                     select(Message)
                     .where(
