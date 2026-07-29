@@ -10,6 +10,7 @@ from app.schemas import (
     ChatResponse,
     DirectChatRequest,
     GroupCreateRequest,
+    GroupMemberRequest,
     GroupUpdateRequest,
 )
 from app.services.serializers import serialize_chat
@@ -187,6 +188,83 @@ async def create_group(
         select(Chat).where(Chat.id == group.id).options(*_chat_load_options())
     )
     return serialize_chat(group)
+
+
+async def _group_and_actor(
+    chat_id: int,
+    actor_id: int,
+    session: AsyncSession,
+) -> tuple[Chat, ChatMember]:
+    group = await session.scalar(
+        select(Chat).where(Chat.id == chat_id, Chat.type == "group")
+    )
+    actor = await session.get(ChatMember, (chat_id, actor_id))
+    if group is None or actor is None:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if actor.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    return group, actor
+
+
+@router.post("/groups/{chat_id}/members", response_model=ChatResponse)
+async def add_group_member(
+    chat_id: int,
+    request_body: GroupMemberRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    _group, actor = await _group_and_actor(chat_id, current_user.id, session)
+    if request_body.role == "admin" and actor.role != "owner":
+        raise HTTPException(status_code=403, detail="Only owner can add admins")
+    user = await session.scalar(
+        select(User).where(
+            User.login == request_body.login,
+            User.is_active.is_(True),
+            User.is_placeholder.is_(False),
+        )
+    )
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    membership = await session.get(ChatMember, (chat_id, user.id))
+    if membership is None:
+        session.add(
+            ChatMember(
+                chat_id=chat_id,
+                user_id=user.id,
+                role=request_body.role,
+            )
+        )
+    elif membership.role != request_body.role:
+        if actor.role != "owner":
+            raise HTTPException(status_code=403, detail="Only owner can change roles")
+        membership.role = request_body.role
+    await session.commit()
+    group = await session.scalar(
+        select(Chat).where(Chat.id == chat_id).options(*_chat_load_options())
+    )
+    return serialize_chat(group)
+
+
+@router.delete("/groups/{chat_id}/members/{login}", status_code=204)
+async def remove_group_member(
+    chat_id: int,
+    login: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    _group, actor = await _group_and_actor(chat_id, current_user.id, session)
+    user = await session.scalar(select(User).where(User.login == login))
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    membership = await session.get(ChatMember, (chat_id, user.id))
+    if membership is None:
+        return
+    if membership.role == "owner":
+        raise HTTPException(status_code=409, detail="Owner cannot be removed")
+    if membership.role == "admin" and actor.role != "owner":
+        raise HTTPException(status_code=403, detail="Only owner can remove admins")
+    await session.delete(membership)
+    await session.commit()
 
 
 @router.patch("/groups/{chat_id}", response_model=ChatResponse)

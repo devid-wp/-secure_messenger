@@ -58,6 +58,11 @@ class GroupUpdateRequest(BaseModel):
     avatar_url: AnyHttpUrl | None = None
 
 
+class GroupMemberRequest(BaseModel):
+    login: str = Field(min_length=1, max_length=64)
+    role: str = Field(default="member", pattern="^(admin|member)$")
+
+
 class MessageResponse(BaseModel):
     id: int
     chat_id: int
