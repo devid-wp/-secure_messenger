@@ -9,6 +9,10 @@ def serialize_chat(chat: Chat) -> dict:
         "created_by": chat.creator.login,
         "created_at": chat.created_at,
         "members": sorted(member.user.login for member in chat.members),
+        "member_roles": {
+            member.user.login: member.role for member in chat.members
+        },
+        "avatar_url": chat.avatar_url,
     }
 
 

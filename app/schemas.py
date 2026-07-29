@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 
 
 class Credentials(BaseModel):
@@ -43,6 +43,19 @@ class ChatResponse(BaseModel):
     created_by: str
     created_at: datetime
     members: list[str]
+    member_roles: dict[str, str]
+    avatar_url: str | None
+
+
+class GroupCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    avatar_url: AnyHttpUrl | None = None
+    member_logins: list[str] = Field(default_factory=list, max_length=99)
+
+
+class GroupUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    avatar_url: AnyHttpUrl | None = None
 
 
 class MessageResponse(BaseModel):

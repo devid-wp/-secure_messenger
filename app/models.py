@@ -137,6 +137,7 @@ class Chat(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     type: Mapped[str] = mapped_column(String(16), nullable=False)
     name: Mapped[Optional[str]] = mapped_column(String(255))
+    avatar_url: Mapped[Optional[str]] = mapped_column(String(2048))
     direct_key: Mapped[Optional[str]] = mapped_column(
         String(64),
         unique=True,

@@ -6,7 +6,12 @@ from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_current_user, get_db
 from app.models import Chat, ChatMember, User, UserBlock
-from app.schemas import ChatResponse, DirectChatRequest
+from app.schemas import (
+    ChatResponse,
+    DirectChatRequest,
+    GroupCreateRequest,
+    GroupUpdateRequest,
+)
 from app.services.serializers import serialize_chat
 
 
@@ -120,3 +125,95 @@ async def create_direct_chat(
             .options(*_chat_load_options())
         )
     return serialize_chat(chat)
+
+
+@router.get("/groups", response_model=list[ChatResponse])
+async def list_groups(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    groups = (
+        await session.scalars(
+            select(Chat)
+            .join(ChatMember)
+            .where(
+                ChatMember.user_id == current_user.id,
+                Chat.type == "group",
+            )
+            .options(*_chat_load_options())
+            .order_by(Chat.created_at.desc(), Chat.id.desc())
+        )
+    ).all()
+    return [serialize_chat(group) for group in groups]
+
+
+@router.post("/groups", response_model=ChatResponse, status_code=201)
+async def create_group(
+    request_body: GroupCreateRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    name = request_body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Group name cannot be blank")
+    requested_logins = {
+        login.strip() for login in request_body.member_logins if login.strip()
+    }
+    requested_logins.discard(current_user.login)
+    users = list(
+        await session.scalars(
+            select(User).where(
+                User.login.in_(requested_logins),
+                User.is_active.is_(True),
+                User.is_placeholder.is_(False),
+            )
+        )
+    )
+    if len(users) != len(requested_logins):
+        raise HTTPException(status_code=404, detail="One or more users not found")
+    group = Chat(
+        type="group",
+        name=name,
+        avatar_url=str(request_body.avatar_url) if request_body.avatar_url else None,
+        created_by_user_id=current_user.id,
+        members=[
+            ChatMember(user_id=current_user.id, role="owner"),
+            *(ChatMember(user_id=user.id, role="member") for user in users),
+        ],
+    )
+    session.add(group)
+    await session.commit()
+    group = await session.scalar(
+        select(Chat).where(Chat.id == group.id).options(*_chat_load_options())
+    )
+    return serialize_chat(group)
+
+
+@router.patch("/groups/{chat_id}", response_model=ChatResponse)
+async def update_group(
+    chat_id: int,
+    request_body: GroupUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    group = await session.scalar(
+        select(Chat).where(Chat.id == chat_id, Chat.type == "group")
+    )
+    membership = await session.get(ChatMember, (chat_id, current_user.id))
+    if group is None or membership is None:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if membership.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    if request_body.name is not None:
+        group.name = request_body.name.strip()
+        if not group.name:
+            raise HTTPException(status_code=400, detail="Group name cannot be blank")
+    if "avatar_url" in request_body.model_fields_set:
+        group.avatar_url = (
+            str(request_body.avatar_url) if request_body.avatar_url else None
+        )
+    await session.commit()
+    group = await session.scalar(
+        select(Chat).where(Chat.id == chat_id).options(*_chat_load_options())
+    )
+    return serialize_chat(group)
