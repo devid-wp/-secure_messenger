@@ -10,6 +10,10 @@ $pythonSha256 = "3c9c81d80f91c002ced86d645422d81432c68c7d9b6b0e974768ca2e449a4d0
 $nodeVersion = "24.18.0"
 
 Set-Location $projectRoot
+New-Item -ItemType Directory -Force -Path $runtimePath | Out-Null
+
+$backendMarker = Join-Path $runtimePath "backend-dependencies.txt"
+$frontendMarker = Join-Path $runtimePath "frontend-dependencies.txt"
 
 function Refresh-ProcessPath {
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
@@ -139,24 +143,55 @@ if (-not $venvHealthy) {
     }
     Write-Host "Creating a clean Python environment..."
     & $systemPython -m venv $venvPath
+    Remove-Item -LiteralPath $backendMarker -ErrorAction SilentlyContinue
 }
 
-Write-Host "Checking backend dependencies..."
-& $venvPython -m pip install --upgrade pip
-& $venvPython -m pip install -r requirements-dev.txt
+$requirementsHash = (
+    Get-FileHash -LiteralPath "requirements.txt" -Algorithm SHA256
+).Hash
+$developmentRequirementsHash = (
+    Get-FileHash -LiteralPath "requirements-dev.txt" -Algorithm SHA256
+).Hash
+$backendFingerprint = "$requirementsHash`:$developmentRequirementsHash"
+$installedBackendFingerprint = (
+    Get-Content -LiteralPath $backendMarker -ErrorAction SilentlyContinue
+)
+if ($installedBackendFingerprint -ne $backendFingerprint) {
+    Write-Host "Installing backend dependencies..."
+    & $venvPython -m pip install --upgrade pip
+    & $venvPython -m pip install -r requirements-dev.txt
+    Set-Content -LiteralPath $backendMarker -Value $backendFingerprint
+} else {
+    Write-Host "Backend dependencies are up to date."
+}
 
 Write-Host "Applying database migrations..."
 & $venvPython -m alembic upgrade head
 
-Write-Host "Checking frontend dependencies..."
-Push-Location $frontendPath
-try {
-    & $nodeTools.Npm install
-} finally {
-    Pop-Location
+$frontendFingerprint = (
+    Get-FileHash -LiteralPath (Join-Path $frontendPath "package-lock.json") `
+        -Algorithm SHA256
+).Hash
+$installedFrontendFingerprint = (
+    Get-Content -LiteralPath $frontendMarker -ErrorAction SilentlyContinue
+)
+$frontendModulesPath = Join-Path $frontendPath "node_modules"
+if (
+    ($installedFrontendFingerprint -ne $frontendFingerprint) -or
+    (-not (Test-Path -LiteralPath $frontendModulesPath))
+) {
+    Write-Host "Installing frontend dependencies..."
+    Push-Location $frontendPath
+    try {
+        & $nodeTools.Npm install
+        Set-Content -LiteralPath $frontendMarker -Value $frontendFingerprint
+    } finally {
+        Pop-Location
+    }
+} else {
+    Write-Host "Frontend dependencies are up to date."
 }
 
-New-Item -ItemType Directory -Force -Path $runtimePath | Out-Null
 $backendLog = Join-Path $runtimePath "backend.log"
 $backendErrorLog = Join-Path $runtimePath "backend-error.log"
 $frontendLog = Join-Path $runtimePath "frontend.log"
