@@ -1,45 +1,35 @@
 # Secure Messenger Frontend
 
-React + Vite приложение для браузерного мессенджера.
+A React and Vite client for Secure Messenger.
 
-## Установка
+## Development
 
-```bash
-cd frontend
+From the `frontend` directory:
+
+```powershell
 npm install
-```
-
-## Запуск dev-сервера
-
-```bash
 npm run dev
 ```
 
-Приложение будет доступно по адресу `http://localhost:5173`
+The application is available at `http://localhost:5173`. During local development,
+the backend is expected at `http://localhost:8000`. Set `VITE_API_URL` to use a
+different backend origin.
 
-## Сборка для production
+## Production build
 
-```bash
+```powershell
 npm run build
 ```
 
-## Структура
+The generated static files are written to `dist`.
 
-```
-src/
-├── main.jsx           # Entry point
-├── App.jsx            # Main app component
-├── App.css
-├── index.css          # Global styles
-└── components/
-    ├── LoginForm.jsx  # Login/Register
-    ├── LoginForm.css
-    ├── ChatApp.jsx    # Main chat interface
-    └── ChatApp.css
-```
+## Docker
 
-## Требования
+The repository-level `compose.yaml` builds this frontend and serves it through
+Nginx at `http://localhost:8080`. Nginx also proxies API and WebSocket traffic to
+the backend container.
 
-- Node.js >= 16.x
-- npm или yarn
-- FastAPI бэкенд на `http://localhost:8000`
+## Requirements
+
+- Node.js 20 or newer
+- npm

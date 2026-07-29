@@ -3,7 +3,9 @@ import { useTheme } from '../ThemeContext'
 import './ChatApp.css'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
-const WS_URL = API_URL.replace(/^http/, 'ws')
+const WS_URL = API_URL
+  ? API_URL.replace(/^http/, 'ws')
+  : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
 
 function readOutbox(login) {
   try {
@@ -50,9 +52,9 @@ function Avatar({ name, size = 40, src = null }) {
 
 function chatTitle(chat, currentLogin) {
   if (chat.type === 'group') {
-    return chat.name || `Группа #${chat.id}`
+    return chat.name || `Group #${chat.id}`
   }
-  return chat.members.find((member) => member !== currentLogin) || `Чат #${chat.id}`
+  return chat.members.find((member) => member !== currentLogin) || `Chat #${chat.id}`
 }
 
 function messageTime(timestamp) {
@@ -61,18 +63,18 @@ function messageTime(timestamp) {
   if (sqlTime) return sqlTime[1]
   const parsed = new Date(timestamp)
   if (Number.isNaN(parsed.getTime())) return timestamp
-  return parsed.toLocaleTimeString('ru-RU', {
+  return parsed.toLocaleTimeString('en-US', {
     hour: '2-digit',
     minute: '2-digit',
   })
 }
 
 const STATUS_LABELS = {
-  sending: 'отправка…',
-  sent: 'отправлено',
-  delivered: 'доставлено',
-  read: 'прочитано',
-  failed: 'не отправлено — повтор при подключении',
+  sending: 'sending…',
+  sent: 'sent',
+  delivered: 'delivered',
+  read: 'read',
+  failed: 'failed — retrying when connected',
 }
 
 function ChatApp({ token, login, onLogout }) {
@@ -165,7 +167,7 @@ function ChatApp({ token, login, onLogout }) {
           return
         }
         if (!dmResponse.ok || !groupsResponse.ok || !invitationsResponse.ok) {
-          throw new Error('Не удалось загрузить список чатов')
+          throw new Error('Could not load conversations')
         }
 
         const chatData = [
@@ -208,7 +210,7 @@ function ChatApp({ token, login, onLogout }) {
           onLogout()
           return
         }
-        if (!response.ok) throw new Error('Не удалось выполнить поиск')
+        if (!response.ok) throw new Error('Search failed')
         setSearchResults(await response.json())
       } catch (searchError) {
         if (searchError.name !== 'AbortError') setError(searchError.message)
@@ -237,7 +239,7 @@ function ChatApp({ token, login, onLogout }) {
           onLogout()
           return
         }
-        if (!response.ok) throw new Error('Не удалось загрузить сообщения')
+        if (!response.ok) throw new Error('Could not load messages')
         const data = await response.json()
         if (!cancelled) {
           const pending = outboxRef.current.filter(
@@ -270,7 +272,7 @@ function ChatApp({ token, login, onLogout }) {
         }`,
         { headers: authHeaders }
       )
-      if (!response.ok) throw new Error('Не удалось загрузить историю')
+      if (!response.ok) throw new Error('Could not load message history')
       const data = await response.json()
       prependingHistoryRef.current = true
       setMessages((previous) => [...data.items, ...previous])
@@ -334,14 +336,14 @@ function ChatApp({ token, login, onLogout }) {
       }
 
       ws.onerror = () => {
-        setError('Соединение потеряно — сообщения останутся в очереди')
+        setError('Connection lost — messages will remain queued')
       }
 
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data)
           if (data.type === 'error') {
-            setError(data.detail || 'Сообщение не отправлено')
+            setError(data.detail || 'Message was not sent')
             return
           }
           if (data.type === 'message_ack') {
@@ -395,7 +397,7 @@ function ChatApp({ token, login, onLogout }) {
             setError('')
           }
         } catch {
-          setError('Сервер прислал некорректный ответ')
+          setError('The server returned an invalid response')
         }
       }
     }
@@ -449,7 +451,7 @@ function ChatApp({ token, login, onLogout }) {
         onLogout()
         return
       }
-      if (!response.ok) throw new Error('Не удалось создать чат')
+      if (!response.ok) throw new Error('Could not create the conversation')
       const chat = await response.json()
       setChats((previous) => (
         previous.some((item) => item.id === chat.id)
@@ -516,7 +518,7 @@ function ChatApp({ token, login, onLogout }) {
   }
 
   const editMessage = async (message) => {
-    const content = window.prompt('Изменить сообщение', message.content)
+    const content = window.prompt('Edit message', message.content)
     if (!content?.trim() || content.trim() === message.content) return
     const response = await fetch(
       `${API_URL}/api/v1/chats/${message.chat_id}/messages/${message.server_seq}`,
@@ -526,43 +528,43 @@ function ChatApp({ token, login, onLogout }) {
         body: JSON.stringify({ content: content.trim() }),
       }
     )
-    if (!response.ok) setError('Не удалось изменить сообщение')
+    if (!response.ok) setError('Could not edit the message')
   }
 
   const deleteMessage = async (message) => {
-    if (!window.confirm('Удалить сообщение?')) return
+    if (!window.confirm('Delete this message?')) return
     const response = await fetch(
       `${API_URL}/api/v1/chats/${message.chat_id}/messages/${message.server_seq}`,
       { method: 'DELETE', headers: authHeaders }
     )
-    if (!response.ok) setError('Не удалось удалить сообщение')
+    if (!response.ok) setError('Could not delete the message')
   }
 
   const blockSelectedUser = async () => {
     const otherLogin = selectedConversation?.label
-    if (!otherLogin || !window.confirm(`Заблокировать ${otherLogin}?`)) return
+    if (!otherLogin || !window.confirm(`Block ${otherLogin}?`)) return
     const response = await fetch(
       `${API_URL}/api/v1/users/${encodeURIComponent(otherLogin)}/block`,
       { method: 'POST', headers: authHeaders }
     )
     if (response.ok) {
-      setError(`Пользователь ${otherLogin} заблокирован`)
+      setError(`${otherLogin} has been blocked`)
     } else {
-      setError('Не удалось заблокировать пользователя')
+      setError('Could not block the user')
     }
   }
 
   const createGroup = async () => {
-    const name = window.prompt('Название группы')
+    const name = window.prompt('Group name')
     if (!name?.trim()) return
-    const avatarUrl = window.prompt('URL аватара (необязательно)') || null
+    const avatarUrl = window.prompt('Avatar URL (optional)') || null
     const response = await fetch(`${API_URL}/api/v1/chats/groups`, {
       method: 'POST',
       headers: { ...authHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: name.trim(), avatar_url: avatarUrl }),
     })
     if (!response.ok) {
-      setError('Не удалось создать группу')
+      setError('Could not create the group')
       return
     }
     const group = await response.json()
@@ -571,7 +573,7 @@ function ChatApp({ token, login, onLogout }) {
   }
 
   const groupMemberAction = async (action) => {
-    const loginValue = window.prompt('Логин пользователя')
+    const loginValue = window.prompt('Username')
     if (!loginValue || !selectedChatId) return
     const paths = {
       invite: `invitations`,
@@ -586,7 +588,7 @@ function ChatApp({ token, login, onLogout }) {
         body: action === 'remove' ? undefined : JSON.stringify({ login: loginValue }),
       }
     )
-    setError(response.ok ? 'Группа обновлена' : 'Операция с участником не выполнена')
+    setError(response.ok ? 'Group updated' : 'Member operation failed')
     if (response.ok && action === 'add') {
       const group = await response.json()
       setChats((previous) => previous.map((item) => (
@@ -601,7 +603,7 @@ function ChatApp({ token, login, onLogout }) {
       { method: 'POST', headers: authHeaders }
     )
     if (!response.ok) {
-      setError('Не удалось принять приглашение')
+      setError('Could not accept the invitation')
       return
     }
     const group = await response.json()
@@ -618,26 +620,26 @@ function ChatApp({ token, login, onLogout }) {
 
   return (
     <div className="chat-container">
-      <aside className="server-rail" aria-label="Сервер">
+      <aside className="server-rail" aria-label="Server">
         <div className="server-icon server-icon--active" title="Secure Messenger">
           🔐
         </div>
       </aside>
 
-      <aside className="channel-panel" aria-label="Чаты">
+      <aside className="channel-panel" aria-label="Conversations">
         <header className="channel-header">
           <h2>Secure Messenger</h2>
-          <button type="button" onClick={createGroup}>＋ группа</button>
+          <button type="button" onClick={createGroup}>＋ group</button>
         </header>
 
-        <div className="channel-section-title">Прямые сообщения</div>
+        <div className="channel-section-title">Direct messages</div>
         <div className="user-search">
           <input
             type="search"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Найти пользователя"
-            aria-label="Поиск пользователей"
+            placeholder="Find a user"
+            aria-label="Search users"
           />
         </div>
         <nav className="channel-list">
@@ -669,7 +671,7 @@ function ChatApp({ token, login, onLogout }) {
             key={invitation.id}
             onClick={() => acceptInvitation(invitation)}
           >
-            Принять: {invitation.group_name}
+            Accept: {invitation.group_name}
           </button>
         ))}
 
@@ -677,22 +679,22 @@ function ChatApp({ token, login, onLogout }) {
           <Avatar name={login} size={32} />
           <div className="user-bar__info">
             <div className="user-bar__name">{login}</div>
-            <div className="user-bar__status">в сети</div>
+            <div className="user-bar__status">online</div>
           </div>
           <div className="user-bar__actions">
             <button
               className="icon-btn"
               onClick={toggle}
-              title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
-              aria-label="Переключить тему"
+              title={theme === 'dark' ? 'Light theme' : 'Dark theme'}
+              aria-label="Switch theme"
             >
               {theme === 'dark' ? '☀️' : '🌙'}
             </button>
             <button
               className="icon-btn"
               onClick={handleLogout}
-              title="Выйти"
-              aria-label="Выйти"
+              title="Sign out"
+              aria-label="Sign out"
             >
               ⎋
             </button>
@@ -704,30 +706,30 @@ function ChatApp({ token, login, onLogout }) {
         <header className="chat-header">
           <div className="chat-header__title">
             <span className="hash">#</span>
-            <span>{selectedConversation?.label || 'Выберите чат'}</span>
+            <span>{selectedConversation?.label || 'Select a conversation'}</span>
           </div>
           <div className="chat-header__meta">
             <span className={`status-dot ${wsReady ? 'online' : 'offline'}`} />
-            <span>{wsReady ? 'в сети' : 'подключение...'}</span>
+            <span>{wsReady ? 'online' : 'connecting...'}</span>
             {selectedConversation?.type === 'dm' && (
               <button
                 type="button"
                 className="header-action"
                 onClick={blockSelectedUser}
               >
-                Заблокировать
+                Block
               </button>
             )}
             {selectedConversation?.type === 'group' && (
               <>
                 <button type="button" className="header-action" onClick={() => groupMemberAction('invite')}>
-                  Пригласить
+                  Invite
                 </button>
                 <button type="button" className="header-action" onClick={() => groupMemberAction('add')}>
-                  Добавить
+                  Add
                 </button>
                 <button type="button" className="header-action" onClick={() => groupMemberAction('remove')}>
-                  Удалить
+                  Remove
                 </button>
               </>
             )}
@@ -743,7 +745,7 @@ function ChatApp({ token, login, onLogout }) {
               onClick={loadOlderMessages}
               disabled={loadingOlder}
             >
-              {loadingOlder ? 'Загрузка…' : 'Загрузить предыдущие сообщения'}
+              {loadingOlder ? 'Loading…' : 'Load earlier messages'}
             </button>
           )}
           {messages.length === 0 && (
@@ -751,8 +753,8 @@ function ChatApp({ token, login, onLogout }) {
               <div className="messages-empty__icon">💬</div>
               <p>
                 {selectedChatId === null
-                  ? 'Выберите собеседника слева.'
-                  : 'Сообщений пока нет. Начните беседу!'}
+                  ? 'Select a conversation on the left.'
+                  : 'No messages yet. Start the conversation!'}
               </p>
             </div>
           )}
@@ -769,13 +771,13 @@ function ChatApp({ token, login, onLogout }) {
                     <div className="message__reply">
                       <strong>{message.reply_to_sender}</strong>
                       <span>
-                        {message.reply_to_content || 'Сообщение удалено'}
+                        {message.reply_to_content || 'Message deleted'}
                       </span>
                     </div>
                   )}
                   <div className="message__bubble">
                     <span className="message__text">
-                      {message.deleted_at ? 'Сообщение удалено' : message.content}
+                      {message.deleted_at ? 'Message deleted' : message.content}
                     </span>
                   </div>
                   {!message.deleted_at && message.server_seq && (
@@ -784,7 +786,7 @@ function ChatApp({ token, login, onLogout }) {
                         type="button"
                         onClick={() => setReplyingTo(message)}
                       >
-                        Ответить
+                        Reply
                       </button>
                       {own && (
                         <>
@@ -792,13 +794,13 @@ function ChatApp({ token, login, onLogout }) {
                             type="button"
                             onClick={() => editMessage(message)}
                           >
-                            Изменить
+                            Edit
                           </button>
                           <button
                             type="button"
                             onClick={() => deleteMessage(message)}
                           >
-                            Удалить
+                            Delete
                           </button>
                         </>
                       )}
@@ -806,7 +808,7 @@ function ChatApp({ token, login, onLogout }) {
                   )}
                   <span className="message__time">
                     {messageTime(message.timestamp)}
-                    {message.edited_at && !message.deleted_at && ' · изменено'}
+                    {message.edited_at && !message.deleted_at && ' · edited'}
                     {own && message.status && (
                       <span className={`message__status message__status--${message.status}`}>
                         {' · '}
@@ -824,7 +826,7 @@ function ChatApp({ token, login, onLogout }) {
         {replyingTo && (
           <div className="reply-composer">
             <span>
-              Ответ для <strong>{replyingTo.sender}</strong>:{' '}
+              Replying to <strong>{replyingTo.sender}</strong>:{' '}
               {replyingTo.content}
             </span>
             <button type="button" onClick={() => setReplyingTo(null)}>×</button>
@@ -835,8 +837,8 @@ function ChatApp({ token, login, onLogout }) {
             type="button"
             className="icon-btn icon-btn--large"
             disabled
-            title="Вложения (скоро)"
-            aria-label="Вложения"
+            title="Attachments (coming soon)"
+            aria-label="Attachments"
           >
             📎
           </button>
@@ -846,8 +848,8 @@ function ChatApp({ token, login, onLogout }) {
               type="text"
               placeholder={
                 selectedConversation
-                  ? `Сообщение для ${selectedConversation.label}`
-                  : 'Сначала выберите чат'
+                  ? `Message ${selectedConversation.label}`
+                  : 'Select a conversation first'
               }
               value={inputText}
               onChange={(event) => setInputText(event.target.value)}
@@ -858,8 +860,8 @@ function ChatApp({ token, login, onLogout }) {
             type="submit"
             className="icon-btn icon-btn--accent"
             disabled={selectedChatId === null || !inputText.trim()}
-            title="Отправить"
-            aria-label="Отправить"
+            title="Send"
+            aria-label="Send"
           >
             ➤
           </button>

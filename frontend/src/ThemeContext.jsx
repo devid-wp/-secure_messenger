@@ -21,7 +21,7 @@ export function ThemeProvider({ children }) {
     try {
       localStorage.setItem(STORAGE_KEY, theme)
     } catch {
-      /* localStorage недоступен — пропускаем */
+      /* localStorage is unavailable; keep the default theme. */
     }
   }, [theme])
 

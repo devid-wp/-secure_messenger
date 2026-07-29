@@ -26,21 +26,21 @@ function LoginForm({ onLogin }) {
       const data = await response.json()
 
       if (!response.ok) {
-        setError(data.detail || 'Ошибка при выполнении запроса')
+        setError(data.detail || 'The request could not be completed')
         return
       }
 
       if (isRegister) {
         setLogin('')
         setPassword('')
-        alert('Регистрация успешна! Теперь войдите.')
+        alert('Registration successful. You can now sign in.')
       } else if (data.token) {
         onLogin(data.token, login)
       } else {
-        setError('Неверные учётные данные')
+        setError('Invalid credentials')
       }
     } catch (err) {
-      setError('Ошибка сети: ' + err.message)
+      setError('Network error: ' + err.message)
     } finally {
       setIsLoading(false)
     }
@@ -52,7 +52,7 @@ function LoginForm({ onLogin }) {
         <div className="login-header">
           <div className="login-logo" aria-hidden="true">🔐</div>
           <h1 className="login-title">Secure Messenger</h1>
-          <p className="login-subtitle">Защищённый мессенджер end-to-end</p>
+          <p className="login-subtitle">Secure end-to-end messenger</p>
         </div>
 
         <form className="login-form" onSubmit={(e) => handleSubmit(e, false)}>
@@ -67,7 +67,7 @@ function LoginForm({ onLogin }) {
               autoComplete="username"
               required
             />
-            <label htmlFor="login">Логин</label>
+            <label htmlFor="login">Username</label>
           </div>
 
           <div className="login-field">
@@ -82,14 +82,14 @@ function LoginForm({ onLogin }) {
               required
               minLength={8}
             />
-            <label htmlFor="password">Пароль (мин. 8 символов)</label>
+            <label htmlFor="password">Password (8 characters minimum)</label>
           </div>
 
           {error && <p className="error-message">{error}</p>}
 
           <div className="button-group">
             <button type="submit" className="login-btn" disabled={isLoading}>
-              {isLoading ? 'Загрузка...' : 'Войти'}
+              {isLoading ? 'Loading...' : 'Sign in'}
             </button>
             <button
               type="button"
@@ -97,7 +97,7 @@ function LoginForm({ onLogin }) {
               onClick={(e) => handleSubmit(e, true)}
               disabled={isLoading}
             >
-              Зарегистрироваться
+              Create account
             </button>
           </div>
         </form>
