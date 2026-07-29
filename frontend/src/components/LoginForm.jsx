@@ -50,9 +50,11 @@ function LoginForm({ onLogin }) {
     <div className="login-container">
       <div className="login-box">
         <div className="login-header">
-          <div className="login-logo" aria-hidden="true">🔐</div>
+          <div className="login-logo" aria-hidden="true">SM</div>
           <h1 className="login-title">Secure Messenger</h1>
-          <p className="login-subtitle">Secure end-to-end messenger</p>
+          <p className="login-subtitle">
+            End-to-end encryption is not enabled yet
+          </p>
         </div>
 
         <form className="login-form" onSubmit={(e) => handleSubmit(e, false)}>
