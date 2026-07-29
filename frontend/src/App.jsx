@@ -1,20 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import LoginForm from './components/LoginForm'
 import ChatApp from './components/ChatApp'
 import './App.css'
 
 function App() {
-  const [token, setToken] = useState(null)
-  const [login, setLogin] = useState(null)
-
-  useEffect(() => {
-    const savedToken = localStorage.getItem('token')
-    const savedLogin = localStorage.getItem('login')
-    if (savedToken && savedLogin) {
-      setToken(savedToken)
-      setLogin(savedLogin)
-    }
-  }, [])
+  const [token, setToken] = useState(() => localStorage.getItem('token'))
+  const [login, setLogin] = useState(() => localStorage.getItem('login'))
 
   const handleLogin = (newToken, newLogin) => {
     localStorage.setItem('token', newToken)
