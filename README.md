@@ -5,7 +5,27 @@ A FastAPI and React messenger backed by PostgreSQL and Redis.
 > E2EE is not implemented yet. The server currently stores message content in
 > plaintext. See [docs/README.md](docs/README.md) for the security specification.
 
-## Quick start with Docker
+## One-click start without Docker
+
+Double-click `start.bat`. The launcher automatically:
+
+- installs Python for the current user when it is missing;
+- downloads a verified portable Node.js LTS when Node.js is missing;
+- repairs an incomplete virtual environment;
+- installs backend and frontend dependencies;
+- applies database migrations;
+- starts both servers and prints the application link.
+
+Open:
+
+```text
+http://localhost:5173
+```
+
+Keep the launcher window open. Press `Ctrl+C` to stop both servers. Startup logs
+are stored in `.run` when troubleshooting is needed.
+
+## Docker start
 
 Install Docker Desktop, open PowerShell in the repository root, and run:
 
@@ -13,10 +33,10 @@ Install Docker Desktop, open PowerShell in the repository root, and run:
 .\start.ps1
 ```
 
-You can also double-click `start.bat`, or run it from Command Prompt:
+You can also double-click `start-docker.bat`, or run it from Command Prompt:
 
 ```bat
-start.bat
+start-docker.bat
 ```
 
 Alternatively, use Docker Compose directly:
