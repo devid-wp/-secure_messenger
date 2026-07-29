@@ -906,7 +906,7 @@ function ChatApp({ token, login, onLogout }) {
               {loadingOlder ? 'Loading…' : 'Load earlier messages'}
             </button>
           )}
-          {messages.length === 0 && <EmptyState hasConversation={selectedChatId !== null} />}
+          {messages.length === 0 && <EmptyState conversation={selectedConversation} />}
           {messages.map((message, index) => {
             const own = message.sender === login
             const previous = messages[index - 1]

@@ -16,6 +16,10 @@ function avatarGradient(name) {
   return AVATAR_GRADIENTS[Math.abs(hash) % AVATAR_GRADIENTS.length]
 }
 
+function memberCountLabel(count) {
+  return `${count} ${count === 1 ? 'member' : 'members'}`
+}
+
 export function Icon({ name, size = 18 }) {
   const paths = {
     menu: <path d="M4 7h16M4 12h16M4 17h16" />,
@@ -85,7 +89,7 @@ export function ContactListItem({ conversation, active, onSelect }) {
   const subtitle = conversation.userLogin
     ? 'Start a private conversation'
     : conversation.type === 'group'
-      ? `${conversation.memberCount} members`
+      ? memberCountLabel(conversation.memberCount)
       : 'Private conversation'
   return (
     <button
@@ -114,6 +118,10 @@ export function ConnectionStatus({ connected }) {
 }
 
 export function ChatHeader({ conversation, connected, onBack, onMenu }) {
+  const conversationDetails = conversation?.type === 'group'
+    ? `${memberCountLabel(conversation.memberCount)} · ${connected ? 'online' : 'reconnecting'}`
+    : 'Private conversation'
+
   return (
     <header className="chat-header">
       <button type="button" className="mobile-back icon-button" onClick={onBack} aria-label="Back to conversations">
@@ -123,7 +131,7 @@ export function ChatHeader({ conversation, connected, onBack, onMenu }) {
         {conversation ? <Avatar name={conversation.label} size={42} src={conversation.avatarUrl} /> : <span className="brand-mark brand-mark--small"><Icon name="shield" /></span>}
         <span className="chat-header__copy">
           <strong>{conversation?.label || 'Secure Messenger'}</strong>
-          <span>{conversation ? (conversation.type === 'group' ? `${conversation.memberCount} members` : 'Private conversation') : 'Select a conversation to begin'}</span>
+          <span>{conversation ? conversationDetails : 'Select a conversation to begin'}</span>
         </span>
       </div>
       <div className="chat-header__controls">
@@ -166,12 +174,19 @@ export function MessageActions({ message, own, onReply, onEdit, onDelete }) {
   )
 }
 
-export function EmptyState({ hasConversation }) {
+export function EmptyState({ conversation }) {
+  const hasConversation = Boolean(conversation)
   return (
     <div className="empty-state">
       <span className="empty-state__mark"><Icon name="shield" size={28} /></span>
       <h2>{hasConversation ? 'No messages yet' : 'Secure Messenger'}</h2>
-      <p>{hasConversation ? 'This conversation is private.' : 'Select a conversation to begin.'}</p>
+      <p>
+        {hasConversation
+          ? conversation.type === 'group'
+            ? `Start the conversation in ${conversation.label}.`
+            : `Start a private conversation with ${conversation.label}.`
+          : 'Select a conversation to begin.'}
+      </p>
     </div>
   )
 }
