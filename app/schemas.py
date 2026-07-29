@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import AnyHttpUrl, Base64Bytes, BaseModel, ConfigDict, Field
+from pydantic import Base64Bytes, BaseModel, ConfigDict, Field
 
 
 class Credentials(BaseModel):
@@ -55,7 +55,15 @@ class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     login: str
+    display_name: str | None
+    bio: str | None
+    avatar_url: str | None
     created_at: datetime
+
+
+class ProfileUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, max_length=64)
+    bio: str | None = Field(default=None, max_length=160)
 
 
 class DirectChatRequest(BaseModel):
@@ -76,7 +84,7 @@ class ChatResponse(BaseModel):
 
 class GroupCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    avatar_url: AnyHttpUrl | None = None
+    avatar_url: str | None = Field(default=None, max_length=2048)
     member_logins: list[str] = Field(default_factory=list, max_length=99)
     history_visibility: str = Field(
         default="since_join",
@@ -86,7 +94,7 @@ class GroupCreateRequest(BaseModel):
 
 class GroupUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    avatar_url: AnyHttpUrl | None = None
+    avatar_url: str | None = Field(default=None, max_length=2048)
     history_visibility: str | None = Field(
         default=None,
         pattern="^(all|since_join)$",

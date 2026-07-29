@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +21,7 @@ from app.schemas import (
 )
 from app.services.serializers import serialize_chat
 from app.services.system_messages import append_system_message
+from app.services.uploads import save_image, validate_avatar_url
 
 
 router = APIRouter(prefix="/chats", tags=["chats"])
@@ -195,7 +196,7 @@ async def create_group(
     group = Chat(
         type="group",
         name=name,
-        avatar_url=str(request_body.avatar_url) if request_body.avatar_url else None,
+        avatar_url=validate_avatar_url(request_body.avatar_url),
         history_visibility=request_body.history_visibility,
         created_by_user_id=current_user.id,
         members=[
@@ -546,9 +547,7 @@ async def update_group(
         if group.name != previous_name:
             changes.append(f"renamed the group to {group.name}")
     if "avatar_url" in request_body.model_fields_set:
-        group.avatar_url = (
-            str(request_body.avatar_url) if request_body.avatar_url else None
-        )
+        group.avatar_url = validate_avatar_url(request_body.avatar_url)
         changes.append("updated the group avatar")
     if request_body.history_visibility is not None:
         if membership.role != "owner":
@@ -573,6 +572,33 @@ async def update_group(
         )
     else:
         await session.commit()
+    group = await session.scalar(
+        select(Chat).where(Chat.id == chat_id).options(*_chat_load_options())
+    )
+    return serialize_chat(group)
+
+
+@router.post("/groups/{chat_id}/avatar", response_model=ChatResponse)
+async def upload_group_avatar(
+    chat_id: int,
+    request: Request,
+    avatar: UploadFile = File(),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    group, membership = await _group_and_actor(chat_id, current_user.id, session)
+    if membership.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    group.avatar_url = await save_image(
+        avatar, request.app.state.settings.upload_dir
+    )
+    await append_system_message(
+        request,
+        session,
+        chat_id=chat_id,
+        actor_user_id=current_user.id,
+        content=f"{current_user.login} updated the group avatar",
+    )
     group = await session.scalar(
         select(Chat).where(Chat.id == chat_id).options(*_chat_load_options())
     )

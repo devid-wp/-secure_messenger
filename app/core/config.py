@@ -7,6 +7,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SQLITE_PATH = PROJECT_ROOT / "secure_messenger.db"
+DEFAULT_UPLOAD_DIR = PROJECT_ROOT / "uploads"
 
 
 def _default_database_url() -> str:
@@ -26,6 +27,7 @@ class Settings:
     session_ttl_seconds: int = 2_592_000
     rate_limit_requests: int = 120
     rate_limit_window_seconds: int = 60
+    upload_dir: Path = DEFAULT_UPLOAD_DIR
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -51,6 +53,9 @@ class Settings:
             rate_limit_window_seconds=int(
                 os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60")
             ),
+            upload_dir=Path(
+                os.environ.get("UPLOAD_DIR", str(DEFAULT_UPLOAD_DIR))
+            ).resolve(),
         )
         settings.validate()
         return settings

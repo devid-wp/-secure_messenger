@@ -118,7 +118,7 @@ class FoundationMigrationTests(unittest.TestCase):
                 connection.execute(
                     "SELECT version_num FROM alembic_version"
                 ).fetchone()[0],
-                "20260729_13",
+            "20260729_14",
             )
             self.assertEqual(
                 connection.execute("PRAGMA foreign_key_check").fetchall(),
@@ -214,6 +214,7 @@ class VersionedApiSmokeTests(unittest.TestCase):
         settings = Settings(
             environment="test",
             database_url=sqlite_async_url(self.database_path),
+            upload_dir=Path(self.temporary_directory.name) / "uploads",
         )
         self.client_context = TestClient(create_app(settings))
         self.client = self.client_context.__enter__()
@@ -281,6 +282,29 @@ class VersionedApiSmokeTests(unittest.TestCase):
         paths = self.client.get("/openapi.json").json()["paths"]
         self.assertIn("/api/v1/auth/login", paths)
         self.assertNotIn("/login", paths)
+
+    def test_profile_can_be_customized_with_uploaded_avatar(self) -> None:
+        token = self._register_and_login("profile-user")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        updated = self.client.patch(
+            "/api/v1/users/me",
+            headers=headers,
+            json={"display_name": "Profile User", "bio": "Available"},
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["display_name"], "Profile User")
+        self.assertEqual(updated.json()["bio"], "Available")
+
+        avatar = self.client.post(
+            "/api/v1/users/me/avatar",
+            headers=headers,
+            files={"avatar": ("avatar.png", b"\x89PNG\r\n\x1a\nimage", "image/png")},
+        )
+        self.assertEqual(avatar.status_code, 200, avatar.text)
+        avatar_url = avatar.json()["avatar_url"]
+        self.assertTrue(avatar_url.startswith("/uploads/"))
+        self.assertEqual(self.client.get(avatar_url).status_code, 200)
 
     def test_logout_and_device_revocation(self) -> None:
         token = self._register_and_login("carol")

@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 
 from .core.config import Settings
@@ -56,6 +57,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app_settings.rate_limit_requests,
         app_settings.rate_limit_window_seconds,
         redis,
+    )
+    app_settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    application.mount(
+        "/uploads",
+        StaticFiles(directory=app_settings.upload_dir),
+        name="uploads",
     )
     application.add_middleware(
         CORSMiddleware,

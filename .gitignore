@@ -8,6 +8,7 @@ venv/
 
 # Local SQLite state and backups
 *.db
+uploads/
 *.db-shm
 *.db-wal
 backups/
