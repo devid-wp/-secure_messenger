@@ -17,48 +17,55 @@ from app.db import create_database_engine, create_session_factory
 from app.models import User
 
 
-async def seed_test_account() -> None:
+async def seed_test_accounts() -> None:
     if os.getenv("SEED_TEST_ACCOUNT") != "1":
         raise SystemExit("Refusing to seed without SEED_TEST_ACCOUNT=1")
 
-    login = os.getenv("TEST_LOGIN", "testuser")
+    logins = [
+        login.strip()
+        for login in os.getenv(
+            "TEST_LOGINS",
+            "testuser,test1,test2,test3,test4,test5",
+        ).split(",")
+        if login.strip()
+    ]
     password = os.getenv("TEST_PASSWORD", "TestMessenger!2026")
-    credentials = register_user(login, password)
     settings = Settings.from_env()
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
 
     try:
         async with session_factory() as session:
-            user = await session.scalar(
-                select(User).where(User.login == credentials["login"])
-            )
-            if user is None:
-                user = User(
-                    login=credentials["login"],
-                    password_hash=credentials["hash"].encode("utf-8"),
-                    password_salt=b"",
+            for login in logins:
+                user = await session.scalar(
+                    select(User).where(User.login == login)
                 )
-                session.add(user)
-                action = "created"
-            else:
-                password_matches, _ = verify_password(
-                    password,
-                    user.password_hash,
-                    user.password_salt,
-                )
-                if not password_matches:
-                    user.password_hash = credentials["hash"].encode("utf-8")
-                    user.password_salt = b""
-                    action = "password reset"
+                if user is None:
+                    credentials = register_user(login, password)
+                    user = User(
+                        login=credentials["login"],
+                        password_hash=credentials["hash"].encode("utf-8"),
+                        password_salt=b"",
+                    )
+                    session.add(user)
+                    action = "created"
                 else:
-                    action = "already ready"
+                    password_matches, _ = verify_password(
+                        password,
+                        user.password_hash,
+                        user.password_salt,
+                    )
+                    if not password_matches:
+                        credentials = register_user(login, password)
+                        user.password_hash = credentials["hash"].encode("utf-8")
+                        user.password_salt = b""
+                        action = "password reset"
+                    else:
+                        action = "already ready"
+                print(f"Test account {action}: {login}")
             await session.commit()
     finally:
         await engine.dispose()
 
-    print(f"Test account {action}: {credentials['login']}")
-
-
 if __name__ == "__main__":
-    asyncio.run(seed_test_account())
+    asyncio.run(seed_test_accounts())

@@ -4,11 +4,11 @@ cd /d "%~dp0"
 
 set "DATABASE_URL=sqlite+aiosqlite:///./test_messenger.db"
 set "SEED_TEST_ACCOUNT=1"
-set "TEST_LOGIN=testuser"
+set "TEST_LOGINS=testuser,test1,test2,test3,test4,test5"
 set "TEST_PASSWORD=TestMessenger!2026"
 
 echo Starting Secure Messenger with an isolated test database...
-echo Test login: %TEST_LOGIN%
+echo Test logins: %TEST_LOGINS%
 echo Test password: %TEST_PASSWORD%
 echo.
 
