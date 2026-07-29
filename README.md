@@ -13,6 +13,12 @@ Install Docker Desktop, open PowerShell in the repository root, and run:
 .\start.ps1
 ```
 
+You can also double-click `start.bat`, or run it from Command Prompt:
+
+```bat
+start.bat
+```
+
 Alternatively, use Docker Compose directly:
 
 ```powershell
