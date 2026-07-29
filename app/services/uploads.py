@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi import HTTPException, UploadFile
 
 
-MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_BYTES = 50 * 1024 * 1024
 IMAGE_EXTENSIONS = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
@@ -43,7 +43,7 @@ async def save_image(upload: UploadFile, upload_dir: Path) -> str:
     if not content or len(content) > MAX_IMAGE_BYTES:
         raise HTTPException(
             status_code=413,
-            detail="Avatar must be between 1 byte and 5 MB",
+            detail="Avatar must be between 1 byte and 50 MB",
         )
     signatures = IMAGE_SIGNATURES[upload.content_type]
     valid_signature = any(content.startswith(signature) for signature in signatures)

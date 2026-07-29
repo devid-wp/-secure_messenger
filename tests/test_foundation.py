@@ -13,6 +13,7 @@ from sqlalchemy import CheckConstraint, ForeignKeyConstraint, create_mock_engine
 from app.core.config import Settings
 from app.main import create_app
 from app.models import Base
+from app.services.uploads import MAX_IMAGE_BYTES
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -103,6 +104,9 @@ def create_stage_zero_database(path: Path) -> None:
 
 
 class FoundationMigrationTests(unittest.TestCase):
+    def test_avatar_limit_is_fifty_megabytes(self) -> None:
+        self.assertEqual(MAX_IMAGE_BYTES, 50 * 1024 * 1024)
+
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.database_path = Path(self.temporary_directory.name) / "test.db"
