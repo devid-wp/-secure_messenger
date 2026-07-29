@@ -125,8 +125,11 @@ Write-Host "Node.js: $(& $nodeTools.Node --version)"
 
 $venvHealthy = $false
 if (Test-Path -LiteralPath $venvPython) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     & $venvPython -c "import pydantic_core" 2>$null
     $venvHealthy = $LASTEXITCODE -eq 0
+    $ErrorActionPreference = $previousErrorActionPreference
 }
 if (-not $venvHealthy) {
     if (Test-Path -LiteralPath $venvPath) {
