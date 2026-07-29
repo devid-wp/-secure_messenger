@@ -406,6 +406,21 @@
   padding: 0 4px;
 }
 
+.system-message {
+  align-self: center;
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.system-message time {
+  font-size: 10px;
+  opacity: 0.8;
+}
+
 .message__reply {
   display: flex;
   flex-direction: column;

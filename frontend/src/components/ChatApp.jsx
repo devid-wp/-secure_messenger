@@ -120,6 +120,8 @@ function ChatApp({ token, login, onLogout }) {
         userLogin: null,
         avatarUrl: chat.avatar_url,
         type: chat.type,
+        memberRoles: chat.member_roles,
+        historyVisibility: chat.history_visibility,
       }
     })
     const newDirectChats = searchResults
@@ -137,6 +139,7 @@ function ChatApp({ token, login, onLogout }) {
   const selectedConversation = conversations.find(
     (conversation) => conversation.chatId === selectedChatId
   )
+  const selectedGroupRole = selectedConversation?.memberRoles?.[login]
 
   useEffect(() => {
     selectedChatIdRef.current = selectedChatId
@@ -613,6 +616,70 @@ function ChatApp({ token, login, onLogout }) {
     setChats((previous) => [group, ...previous])
   }
 
+  const transferOwnership = async () => {
+    const newOwner = window.prompt('Username of the new owner')
+    if (!newOwner || !selectedChatId) return
+    const response = await fetch(
+      `${API_URL}/api/v1/chats/groups/${selectedChatId}/owner`,
+      {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ login: newOwner }),
+      }
+    )
+    if (!response.ok) {
+      setError('Could not transfer group ownership')
+      return
+    }
+    const group = await response.json()
+    setChats((previous) => previous.map((item) => (
+      item.id === group.id ? group : item
+    )))
+    setError(`Ownership transferred to ${newOwner}`)
+  }
+
+  const leaveGroup = async () => {
+    if (!selectedChatId || !window.confirm('Leave this group?')) return
+    const response = await fetch(
+      `${API_URL}/api/v1/chats/groups/${selectedChatId}/leave`,
+      { method: 'DELETE', headers: authHeaders }
+    )
+    if (!response.ok) {
+      setError(
+        selectedGroupRole === 'owner'
+          ? 'Transfer ownership before leaving'
+          : 'Could not leave the group'
+      )
+      return
+    }
+    setChats((previous) => previous.filter((item) => item.id !== selectedChatId))
+    setSelectedChatId(null)
+    setMessages([])
+  }
+
+  const toggleHistoryVisibility = async () => {
+    if (!selectedChatId) return
+    const historyVisibility = (
+      selectedConversation.historyVisibility === 'all' ? 'since_join' : 'all'
+    )
+    const response = await fetch(
+      `${API_URL}/api/v1/chats/groups/${selectedChatId}`,
+      {
+        method: 'PATCH',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ history_visibility: historyVisibility }),
+      }
+    )
+    if (!response.ok) {
+      setError('Could not update history access')
+      return
+    }
+    const group = await response.json()
+    setChats((previous) => previous.map((item) => (
+      item.id === group.id ? group : item
+    )))
+  }
+
   const handleLogout = () => {
     wsRef.current?.close()
     onLogout()
@@ -722,14 +789,31 @@ function ChatApp({ token, login, onLogout }) {
             )}
             {selectedConversation?.type === 'group' && (
               <>
-                <button type="button" className="header-action" onClick={() => groupMemberAction('invite')}>
-                  Invite
-                </button>
-                <button type="button" className="header-action" onClick={() => groupMemberAction('add')}>
-                  Add
-                </button>
-                <button type="button" className="header-action" onClick={() => groupMemberAction('remove')}>
-                  Remove
+                {['owner', 'admin'].includes(selectedGroupRole) && (
+                  <>
+                    <button type="button" className="header-action" onClick={() => groupMemberAction('invite')}>
+                      Invite
+                    </button>
+                    <button type="button" className="header-action" onClick={() => groupMemberAction('add')}>
+                      Add
+                    </button>
+                    <button type="button" className="header-action" onClick={() => groupMemberAction('remove')}>
+                      Remove
+                    </button>
+                  </>
+                )}
+                {selectedGroupRole === 'owner' && (
+                  <>
+                    <button type="button" className="header-action" onClick={transferOwnership}>
+                      Transfer owner
+                    </button>
+                    <button type="button" className="header-action" onClick={toggleHistoryVisibility}>
+                      History: {selectedConversation.historyVisibility === 'all' ? 'all' : 'from joining'}
+                    </button>
+                  </>
+                )}
+                <button type="button" className="header-action" onClick={leaveGroup}>
+                  Leave
                 </button>
               </>
             )}
@@ -760,6 +844,14 @@ function ChatApp({ token, login, onLogout }) {
           )}
           {messages.map((message) => {
             const own = message.sender === login
+            if (message.kind === 'system') {
+              return (
+                <div key={message.id} className="system-message">
+                  <span>{message.content}</span>
+                  <time>{messageTime(message.timestamp)}</time>
+                </div>
+              )
+            }
             return (
               <div
                 key={message.id}
