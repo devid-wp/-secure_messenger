@@ -1,69 +1,65 @@
 # Secure Messenger
 
-Мессенджер на FastAPI, SQLAlchemy, PostgreSQL/SQLite и React.
+A FastAPI and React messenger backed by PostgreSQL and Redis.
 
-> Текущая реализация ещё не содержит E2EE и хранит сообщения в открытом виде.
-> Нормативная модель безопасности находится в [docs/README.md](docs/README.md).
+> E2EE is not implemented yet. The server currently stores message content in
+> plaintext. See [docs/README.md](docs/README.md) for the security specification.
 
-## Backend
+## Quick start with Docker
 
-```text
-app/
-  core/config.py       environment и DATABASE_URL
-  db.py                async SQLAlchemy engine и session factory
-  models.py            ORM-модели, CHECK, UNIQUE и FOREIGN KEY
-  schemas.py           модели API
-  dependencies.py      request-scoped DB и authentication dependency
-  routers/
-    auth.py            /api/v1/auth
-    users.py           /api/v1/users
-    chats.py           /api/v1/chats
-    messages.py        /api/v1/chats/{id}/messages
-    realtime.py        /api/v1/realtime/ws
-  services/            Redis sessions, rate limiting, realtime, serializers
-  main.py              сборка FastAPI
-migrations/            Alembic revisions
-```
-
-Подробности фундамента: [docs/foundation.md](docs/foundation.md).
-
-## Локальный запуск с SQLite
-
-Команды выполняются из корня репозитория:
+Install Docker Desktop, open PowerShell in the repository root, and run:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m alembic upgrade head
-.\.venv\Scripts\python.exe -m app.main
+.\start.ps1
 ```
 
-По умолчанию используется `secure_messenger.db` в корне проекта. Приложение
-не создаёт таблицы при импорте: перед запуском всегда выполняется Alembic.
-
-## PostgreSQL
-
-Для локальной проверки PostgreSQL добавлен `compose.yaml`:
+Alternatively, use Docker Compose directly:
 
 ```powershell
-docker compose up -d db
-docker compose up -d redis
-$env:DATABASE_URL = "postgresql+psycopg://secure_messenger:local-development-only@localhost:5432/secure_messenger"
-.\.venv\Scripts\python.exe -m alembic upgrade head
-.\.venv\Scripts\python.exe -m app.main
+docker compose up --build
 ```
 
-В production необходимо установить:
+The services become available at:
 
-```text
-APP_ENV=production
-DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/DATABASE
-REDIS_URL=redis://HOST:6379/0
+- Web application: `http://localhost:8080`
+- Backend API: `http://localhost:8000`
+- OpenAPI documentation: `http://localhost:8000/docs`
+
+The first startup builds both applications, waits for PostgreSQL and Redis, and
+applies all Alembic migrations automatically. Later startups reuse the images
+and persistent database volumes. Stop the stack with `Ctrl+C`.
+
+To stop background containers:
+
+```powershell
+docker compose down
 ```
 
-При `APP_ENV=production` приложение отклоняет SQLite-конфигурацию.
+This command preserves database data. `docker compose down --volumes` deletes
+the database and should only be used when that is intentional.
 
-## Frontend
+## Backend without Docker
+
+For SQLite-based local development, run one command from the repository root:
+
+```powershell
+.\start-backend.ps1
+```
+
+The script:
+
+1. creates `.venv` when needed;
+2. checks that native Python dependencies can be imported;
+3. moves a broken environment to `.venv.broken-<timestamp>` and recreates it;
+4. installs dependencies;
+5. applies Alembic migrations;
+6. starts the API with auto-reload at `http://localhost:8000`.
+
+The error `No module named 'pydantic_core._pydantic_core'` means the existing
+virtual environment is incomplete or corrupted. The launcher repairs this
+automatically without deleting the old environment.
+
+Start the frontend in a second PowerShell window:
 
 ```powershell
 cd frontend
@@ -71,29 +67,38 @@ npm install
 npm run dev
 ```
 
-Frontend обращается к versioned API `/api/v1`. Другой origin backend задаётся
-через `VITE_API_URL`.
+The development frontend is available at `http://localhost:5173`.
 
-Stage 3 добавляет поиск пользователей, идемпотентное создание DM, cursor-history
-и клиентские UUID сообщений. Контракты описаны в
-[docs/stage-3-direct-messages.md](docs/stage-3-direct-messages.md).
+## Manual backend commands
 
-## Миграции
+If you prefer to run each step yourself:
 
 ```powershell
-.\.venv\Scripts\python.exe -m alembic current
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m alembic upgrade head
-.\.venv\Scripts\python.exe -m alembic check
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-Foundation revision сохраняет stage-0 чаты и сообщения. Legacy-участники без
-учётной записи становятся неактивными placeholder users, чтобы все связи могли
-иметь настоящие внешние ключи.
+Run every command separately. Do not append the activation command to
+`python -m app.main`.
 
-## Тесты
+## Tests
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 cd frontend
 npm run build
+```
+
+## Project layout
+
+```text
+app/                  FastAPI application
+  routers/            auth, users, chats, messages, realtime
+  services/           sessions, rate limiting, realtime delivery
+migrations/           Alembic migrations
+frontend/             React and Vite client
+tests/                backend tests
+compose.yaml          complete local application stack
 ```
