@@ -18,61 +18,48 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("chats") as batch_op:
-        batch_op.add_column(
-            sa.Column(
-                "history_visibility",
-                sa.String(length=16),
-                server_default="since_join",
-                nullable=False,
-            )
+    op.add_column(
+        "chats",
+        sa.Column(
+            "history_visibility",
+            sa.String(length=16),
+            sa.CheckConstraint(
+                "history_visibility IN ('all', 'since_join')",
+                name="ck_chats_history_visibility",
+            ),
+            server_default="since_join",
+            nullable=False,
         )
-        batch_op.create_check_constraint(
-            "ck_chats_history_visibility",
-            "history_visibility IN ('all', 'since_join')",
+    )
+    op.add_column(
+        "chat_members",
+        sa.Column(
+            "history_from_seq",
+            sa.Integer(),
+            sa.CheckConstraint(
+                "history_from_seq > 0",
+                name="ck_chat_members_history_from_seq",
+            ),
+            server_default="1",
+            nullable=False,
         )
-
-    with op.batch_alter_table("chat_members") as batch_op:
-        batch_op.add_column(
-            sa.Column(
-                "history_from_seq",
-                sa.Integer(),
-                server_default="1",
-                nullable=False,
-            )
+    )
+    op.add_column(
+        "messages",
+        sa.Column(
+            "kind",
+            sa.String(length=16),
+            sa.CheckConstraint(
+                "kind IN ('user', 'system')",
+                name="ck_messages_kind",
+            ),
+            server_default="user",
+            nullable=False,
         )
-        batch_op.create_check_constraint(
-            "ck_chat_members_history_from_seq",
-            "history_from_seq > 0",
-        )
-
-    with op.batch_alter_table("messages") as batch_op:
-        batch_op.add_column(
-            sa.Column(
-                "kind",
-                sa.String(length=16),
-                server_default="user",
-                nullable=False,
-            )
-        )
-        batch_op.create_check_constraint(
-            "ck_messages_kind",
-            "kind IN ('user', 'system')",
-        )
+    )
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("messages") as batch_op:
-        batch_op.drop_constraint("ck_messages_kind", type_="check")
-        batch_op.drop_column("kind")
-
-    with op.batch_alter_table("chat_members") as batch_op:
-        batch_op.drop_constraint(
-            "ck_chat_members_history_from_seq",
-            type_="check",
-        )
-        batch_op.drop_column("history_from_seq")
-
-    with op.batch_alter_table("chats") as batch_op:
-        batch_op.drop_constraint("ck_chats_history_visibility", type_="check")
-        batch_op.drop_column("history_visibility")
+    op.drop_column("messages", "kind")
+    op.drop_column("chat_members", "history_from_seq")
+    op.drop_column("chats", "history_visibility")
