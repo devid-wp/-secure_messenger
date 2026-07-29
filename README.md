@@ -5,7 +5,9 @@ A FastAPI and React messenger backed by PostgreSQL and Redis.
 > E2EE is not implemented yet. The server currently stores message content in
 > plaintext. See [docs/README.md](docs/README.md) for the security specification.
 
-## One-click start without Docker
+## Start without Docker
+
+### Windows
 
 Double-click `start.bat`. The launcher automatically:
 
@@ -16,14 +18,34 @@ Double-click `start.bat`. The launcher automatically:
 - applies database migrations;
 - starts both servers and prints the application link.
 
+You can also run it from Command Prompt:
+
+```bat
+start.bat
+```
+
+### Linux and macOS
+
+Install Python 3.12+ and Node.js 20+, then run:
+
+```sh
+chmod +x start.sh
+./start.sh
+```
+
+Both launchers use SQLite, so PostgreSQL, Redis, and Docker are not required.
+Python and npm packages are installed only on the first run or when
+`requirements*.txt`/`package-lock.json` changes. Alembic migrations still run
+on every start because they are incremental and safe.
+
 Open:
 
 ```text
 http://localhost:5173
 ```
 
-Keep the launcher window open. Press `Ctrl+C` to stop both servers. Startup logs
-are stored in `.run` when troubleshooting is needed.
+Keep the launcher terminal open. Press `Ctrl+C` to stop both servers. Startup
+logs are stored in `.run` when troubleshooting is needed.
 
 ## Docker start
 
