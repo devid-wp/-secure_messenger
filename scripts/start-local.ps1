@@ -168,6 +168,11 @@ if ($installedBackendFingerprint -ne $backendFingerprint) {
 Write-Host "Applying database migrations..."
 & $venvPython -m alembic upgrade head
 
+if ($env:SEED_TEST_ACCOUNT -eq "1") {
+    Write-Host "Preparing the local test account..."
+    & $venvPython scripts\seed-test-account.py
+}
+
 $frontendFingerprint = (
     Get-FileHash -LiteralPath (Join-Path $frontendPath "package-lock.json") `
         -Algorithm SHA256
