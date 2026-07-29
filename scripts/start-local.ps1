@@ -114,6 +114,39 @@ function Wait-ForUrl([string]$Url, [string]$Name) {
     throw "$Name did not become ready. Check the logs in $runtimePath."
 }
 
+function Stop-ProcessTree([int]$ProcessId) {
+    $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" `
+        -ErrorAction SilentlyContinue
+    foreach ($child in $children) {
+        Stop-ProcessTree -ProcessId $child.ProcessId
+    }
+    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+}
+
+function Stop-StaleProjectListener([int]$Port) {
+    $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen `
+        -ErrorAction SilentlyContinue
+    foreach ($listener in $listeners) {
+        $process = Get-CimInstance Win32_Process `
+            -Filter "ProcessId = $($listener.OwningProcess)" `
+            -ErrorAction SilentlyContinue
+        $commandLine = $process.CommandLine
+        $executablePath = $process.ExecutablePath
+        $belongsToProject = (
+            ($commandLine -and $commandLine.Contains($projectRoot)) -or
+            ($executablePath -and $executablePath.Contains($projectRoot))
+        )
+        if (-not $belongsToProject) {
+            throw (
+                "Port $Port is already used by another application " +
+                "(PID $($listener.OwningProcess)). Close it and run this file again."
+            )
+        }
+        Write-Host "Stopping an older Secure Messenger process on port $Port..."
+        Stop-ProcessTree -ProcessId $listener.OwningProcess
+    }
+}
+
 $systemPython = Find-SystemPython
 if (-not $systemPython) {
     Install-Python
@@ -205,6 +238,11 @@ $frontendErrorLog = Join-Path $runtimePath "frontend-error.log"
 $backend = $null
 $frontend = $null
 try {
+    Stop-StaleProjectListener -Port 8000
+    foreach ($frontendPort in 5173..5180) {
+        Stop-StaleProjectListener -Port $frontendPort
+    }
+
     Write-Host "Starting backend and frontend..."
     $backend = Start-Process -FilePath $venvPython -ArgumentList @(
         "-m", "uvicorn", "app.main:app",
@@ -227,12 +265,15 @@ try {
     while (-not $backend.HasExited -and -not $frontend.HasExited) {
         Start-Sleep -Seconds 1
     }
-    throw "A server stopped unexpectedly. Check the logs in $runtimePath."
+    if ($backend.HasExited) {
+        throw "Backend stopped unexpectedly. Check backend-error.log in $runtimePath."
+    }
+    throw "Frontend stopped unexpectedly. Check frontend-error.log in $runtimePath."
 } finally {
     if ($backend -and -not $backend.HasExited) {
-        Stop-Process -Id $backend.Id -Force
+        Stop-ProcessTree -ProcessId $backend.Id
     }
     if ($frontend -and -not $frontend.HasExited) {
-        Stop-Process -Id $frontend.Id -Force
+        Stop-ProcessTree -ProcessId $frontend.Id
     }
 }
