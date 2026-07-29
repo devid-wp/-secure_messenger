@@ -34,6 +34,7 @@ function avatarColor(login) {
 
 function Avatar({ name, size = 40, src = null }) {
   const safeName = name || '?'
+  const imageSource = src?.startsWith('/') ? `${API_URL}${src}` : src
   return (
     <div
       className="avatar"
@@ -45,7 +46,21 @@ function Avatar({ name, size = 40, src = null }) {
       }}
       aria-hidden="true"
     >
-      {src ? <img src={src} alt="" /> : safeName.charAt(0).toUpperCase()}
+      {imageSource ? <img src={imageSource} alt="" /> : safeName.charAt(0).toUpperCase()}
+    </div>
+  )
+}
+
+function Modal({ title, children, onClose }) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="modal-card" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
+        <header className="modal-card__header">
+          <h2>{title}</h2>
+          <button type="button" className="icon-btn" onClick={onClose}>×</button>
+        </header>
+        {children}
+      </section>
     </div>
   )
 }
@@ -92,6 +107,17 @@ function ChatApp({ token, login, onLogout }) {
   const [error, setError] = useState('')
   const [wsReady, setWsReady] = useState(false)
   const [historyRefresh, setHistoryRefresh] = useState(0)
+  const [profile, setProfile] = useState({ login, display_name: '', bio: '', avatar_url: null })
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false)
+  const [groupName, setGroupName] = useState('')
+  const [groupAvatar, setGroupAvatar] = useState(null)
+  const [memberDialog, setMemberDialog] = useState(null)
+  const [memberLogin, setMemberLogin] = useState('')
+  const [mainMenuOpen, setMainMenuOpen] = useState(false)
+  const [chatMenuOpen, setChatMenuOpen] = useState(false)
+  const [editingMessage, setEditingMessage] = useState(null)
+  const [editText, setEditText] = useState('')
   const wsRef = useRef(null)
   const selectedChatIdRef = useRef(null)
   const messagesEndRef = useRef(null)
@@ -158,18 +184,19 @@ function ChatApp({ token, login, onLogout }) {
 
     const loadWorkspace = async () => {
       try {
-        const [dmResponse, groupsResponse, invitationsResponse] = await Promise.all([
+        const [dmResponse, groupsResponse, invitationsResponse, profileResponse] = await Promise.all([
           fetch(`${API_URL}/api/v1/chats/dm`, { headers: authHeaders }),
           fetch(`${API_URL}/api/v1/chats/groups`, { headers: authHeaders }),
           fetch(`${API_URL}/api/v1/chats/groups/invitations/pending`, {
             headers: authHeaders,
           }),
+          fetch(`${API_URL}/api/v1/users/me`, { headers: authHeaders }),
         ])
         if (dmResponse.status === 401) {
           onLogout()
           return
         }
-        if (!dmResponse.ok || !groupsResponse.ok || !invitationsResponse.ok) {
+        if (!dmResponse.ok || !groupsResponse.ok || !invitationsResponse.ok || !profileResponse.ok) {
           throw new Error('Could not load conversations')
         }
 
@@ -178,9 +205,11 @@ function ChatApp({ token, login, onLogout }) {
           ...await dmResponse.json(),
         ]
         const invitationData = await invitationsResponse.json()
+        const profileData = await profileResponse.json()
         if (cancelled) return
         setChats(chatData)
         setInvitations(invitationData)
+        setProfile(profileData)
         setSelectedChatId((currentId) => {
           if (chatData.some((chat) => chat.id === currentId)) return currentId
           return chatData[0]?.id ?? null
@@ -520,18 +549,28 @@ function ChatApp({ token, login, onLogout }) {
     inputRef.current?.focus()
   }
 
-  const editMessage = async (message) => {
-    const content = window.prompt('Edit message', message.content)
-    if (!content?.trim() || content.trim() === message.content) return
+  const editMessage = (message) => {
+    setEditingMessage(message)
+    setEditText(message.content)
+  }
+
+  const submitMessageEdit = async (event) => {
+    event.preventDefault()
+    if (!editText.trim() || !editingMessage) return
     const response = await fetch(
-      `${API_URL}/api/v1/chats/${message.chat_id}/messages/${message.server_seq}`,
+      `${API_URL}/api/v1/chats/${editingMessage.chat_id}/messages/${editingMessage.server_seq}`,
       {
         method: 'PATCH',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: content.trim() }),
+        body: JSON.stringify({ content: editText.trim() }),
       }
     )
-    if (!response.ok) setError('Could not edit the message')
+    if (!response.ok) {
+      setError('Could not edit the message')
+      return
+    }
+    setEditingMessage(null)
+    setEditText('')
   }
 
   const deleteMessage = async (message) => {
@@ -557,26 +596,36 @@ function ChatApp({ token, login, onLogout }) {
     }
   }
 
-  const createGroup = async () => {
-    const name = window.prompt('Group name')
-    if (!name?.trim()) return
-    const avatarUrl = window.prompt('Avatar URL (optional)') || null
+  const createGroup = async (event) => {
+    event.preventDefault()
+    if (!groupName.trim()) return
     const response = await fetch(`${API_URL}/api/v1/chats/groups`, {
       method: 'POST',
       headers: { ...authHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.trim(), avatar_url: avatarUrl }),
+      body: JSON.stringify({ name: groupName.trim(), avatar_url: null }),
     })
     if (!response.ok) {
       setError('Could not create the group')
       return
     }
-    const group = await response.json()
+    let group = await response.json()
+    if (groupAvatar) {
+      const formData = new FormData()
+      formData.append('avatar', groupAvatar)
+      const avatarResponse = await fetch(
+        `${API_URL}/api/v1/chats/groups/${group.id}/avatar`,
+        { method: 'POST', headers: authHeaders, body: formData }
+      )
+      if (avatarResponse.ok) group = await avatarResponse.json()
+    }
     setChats((previous) => [group, ...previous])
     setSelectedChatId(group.id)
+    setGroupName('')
+    setGroupAvatar(null)
+    setGroupDialogOpen(false)
   }
 
-  const groupMemberAction = async (action) => {
-    const loginValue = window.prompt('Username')
+  const groupMemberAction = async (action, loginValue) => {
     if (!loginValue || !selectedChatId) return
     const paths = {
       invite: `invitations`,
@@ -598,6 +647,10 @@ function ChatApp({ token, login, onLogout }) {
         item.id === group.id ? group : item
       )))
     }
+    if (response.ok) {
+      setMemberDialog(null)
+      setMemberLogin('')
+    }
   }
 
   const acceptInvitation = async (invitation) => {
@@ -616,8 +669,7 @@ function ChatApp({ token, login, onLogout }) {
     setChats((previous) => [group, ...previous])
   }
 
-  const transferOwnership = async () => {
-    const newOwner = window.prompt('Username of the new owner')
+  const transferOwnership = async (newOwner) => {
     if (!newOwner || !selectedChatId) return
     const response = await fetch(
       `${API_URL}/api/v1/chats/groups/${selectedChatId}/owner`,
@@ -636,6 +688,42 @@ function ChatApp({ token, login, onLogout }) {
       item.id === group.id ? group : item
     )))
     setError(`Ownership transferred to ${newOwner}`)
+    setMemberDialog(null)
+    setMemberLogin('')
+  }
+
+  const saveProfile = async (event) => {
+    event.preventDefault()
+    let response = await fetch(`${API_URL}/api/v1/users/me`, {
+      method: 'PATCH',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        display_name: profile.display_name || null,
+        bio: profile.bio || null,
+      }),
+    })
+    if (!response.ok) {
+      setError('Could not update profile')
+      return
+    }
+    let updatedProfile = await response.json()
+    const avatarFile = event.currentTarget.elements.avatar.files[0]
+    if (avatarFile) {
+      const formData = new FormData()
+      formData.append('avatar', avatarFile)
+      response = await fetch(`${API_URL}/api/v1/users/me/avatar`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: formData,
+      })
+      if (!response.ok) {
+        setError('Profile saved, but avatar upload failed')
+        return
+      }
+      updatedProfile = await response.json()
+    }
+    setProfile(updatedProfile)
+    setProfileOpen(false)
   }
 
   const leaveGroup = async () => {
@@ -687,25 +775,27 @@ function ChatApp({ token, login, onLogout }) {
 
   return (
     <div className="chat-container">
-      <aside className="server-rail" aria-label="Server">
-        <div className="server-icon server-icon--active" title="Secure Messenger">
-          🔐
-        </div>
-      </aside>
-
       <aside className="channel-panel" aria-label="Conversations">
         <header className="channel-header">
+          <button className="brand-menu" type="button" onClick={() => setMainMenuOpen((value) => !value)}>☰</button>
           <h2>Secure Messenger</h2>
-          <button type="button" onClick={createGroup}>＋ group</button>
+          <button className="new-chat-button" type="button" onClick={() => setGroupDialogOpen(true)}>✎</button>
+          {mainMenuOpen && (
+            <div className="main-menu">
+              <button type="button" onClick={() => { setGroupDialogOpen(true); setMainMenuOpen(false) }}>New group</button>
+              <button type="button" onClick={() => { setProfileOpen(true); setMainMenuOpen(false) }}>My profile</button>
+              <button type="button" onClick={toggle}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
+              <button type="button" className="danger-action" onClick={handleLogout}>Sign out</button>
+            </div>
+          )}
         </header>
 
-        <div className="channel-section-title">Direct messages</div>
         <div className="user-search">
           <input
             type="search"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Find a user"
+            placeholder="Search"
             aria-label="Search users"
           />
         </div>
@@ -742,80 +832,44 @@ function ChatApp({ token, login, onLogout }) {
           </button>
         ))}
 
-        <div className="user-bar">
-          <Avatar name={login} size={32} />
+        <button className="user-bar" type="button" onClick={() => setProfileOpen(true)}>
+          <Avatar name={profile.display_name || login} size={42} src={profile.avatar_url} />
           <div className="user-bar__info">
-            <div className="user-bar__name">{login}</div>
+            <div className="user-bar__name">{profile.display_name || login}</div>
             <div className="user-bar__status">online</div>
           </div>
-          <div className="user-bar__actions">
-            <button
-              className="icon-btn"
-              onClick={toggle}
-              title={theme === 'dark' ? 'Light theme' : 'Dark theme'}
-              aria-label="Switch theme"
-            >
-              {theme === 'dark' ? '☀️' : '🌙'}
-            </button>
-            <button
-              className="icon-btn"
-              onClick={handleLogout}
-              title="Sign out"
-              aria-label="Sign out"
-            >
-              ⎋
-            </button>
-          </div>
-        </div>
+          <span className="user-bar__chevron">›</span>
+        </button>
       </aside>
 
       <main className="chat-panel">
         <header className="chat-header">
           <div className="chat-header__title">
-            <span className="hash">#</span>
+            {selectedConversation && <Avatar name={selectedConversation.label} size={40} src={selectedConversation.avatarUrl} />}
             <span>{selectedConversation?.label || 'Select a conversation'}</span>
           </div>
           <div className="chat-header__meta">
             <span className={`status-dot ${wsReady ? 'online' : 'offline'}`} />
             <span>{wsReady ? 'online' : 'connecting...'}</span>
-            {selectedConversation?.type === 'dm' && (
-              <button
-                type="button"
-                className="header-action"
-                onClick={blockSelectedUser}
-              >
-                Block
-              </button>
-            )}
-            {selectedConversation?.type === 'group' && (
-              <>
-                {['owner', 'admin'].includes(selectedGroupRole) && (
+            {selectedConversation && <button type="button" className="chat-menu-button" onClick={() => setChatMenuOpen((value) => !value)}>⋮</button>}
+            {chatMenuOpen && selectedConversation && (
+              <div className="chat-actions-menu">
+                {selectedConversation.type === 'dm' && <button type="button" onClick={blockSelectedUser}>Block user</button>}
+                {selectedConversation.type === 'group' && ['owner', 'admin'].includes(selectedGroupRole) && (
                   <>
-                    <button type="button" className="header-action" onClick={() => groupMemberAction('invite')}>
-                      Invite
-                    </button>
-                    <button type="button" className="header-action" onClick={() => groupMemberAction('add')}>
-                      Add
-                    </button>
-                    <button type="button" className="header-action" onClick={() => groupMemberAction('remove')}>
-                      Remove
-                    </button>
+                    <button type="button" onClick={() => { setMemberDialog('invite'); setChatMenuOpen(false) }}>Invite member</button>
+                    <button type="button" onClick={() => { setMemberDialog('add'); setChatMenuOpen(false) }}>Add member</button>
+                    <button type="button" onClick={() => { setMemberDialog('remove'); setChatMenuOpen(false) }}>Remove member</button>
                   </>
                 )}
                 {selectedGroupRole === 'owner' && (
                   <>
-                    <button type="button" className="header-action" onClick={transferOwnership}>
-                      Transfer owner
-                    </button>
-                    <button type="button" className="header-action" onClick={toggleHistoryVisibility}>
-                      History: {selectedConversation.historyVisibility === 'all' ? 'all' : 'from joining'}
-                    </button>
+                    <button type="button" onClick={() => { setMemberDialog('owner'); setChatMenuOpen(false) }}>Transfer ownership</button>
+                    <button type="button" onClick={toggleHistoryVisibility}>Change history access</button>
                   </>
                 )}
-                <button type="button" className="header-action" onClick={leaveGroup}>
-                  Leave
-                </button>
-              </>
+                {selectedConversation.type === 'group' && <button type="button" className="danger-action" onClick={leaveGroup}>Leave group</button>}
+              </div>
             )}
           </div>
         </header>
@@ -959,6 +1013,58 @@ function ChatApp({ token, login, onLogout }) {
           </button>
         </form>
       </main>
+
+      {groupDialogOpen && (
+        <Modal title="New group" onClose={() => setGroupDialogOpen(false)}>
+          <form className="modal-form" onSubmit={createGroup}>
+            <label className="photo-picker">
+              <Avatar name={groupName || 'Group'} size={84} src={groupAvatar ? URL.createObjectURL(groupAvatar) : null} />
+              <span>Choose group photo</span>
+              <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setGroupAvatar(event.target.files[0] || null)} />
+            </label>
+            <label>Group name<input value={groupName} maxLength={255} autoFocus onChange={(event) => setGroupName(event.target.value)} placeholder="Name your group" /></label>
+            <button className="primary-button" type="submit" disabled={!groupName.trim()}>Create group</button>
+          </form>
+        </Modal>
+      )}
+
+      {profileOpen && (
+        <Modal title="Edit profile" onClose={() => setProfileOpen(false)}>
+          <form className="modal-form" onSubmit={saveProfile}>
+            <label className="photo-picker">
+              <Avatar name={profile.display_name || login} size={92} src={profile.avatar_url} />
+              <span>Upload a new photo</span>
+              <input name="avatar" type="file" accept="image/jpeg,image/png,image/webp" />
+            </label>
+            <label>Display name<input value={profile.display_name || ''} maxLength={64} onChange={(event) => setProfile((value) => ({ ...value, display_name: event.target.value }))} /></label>
+            <label>Bio<textarea value={profile.bio || ''} maxLength={160} rows={3} onChange={(event) => setProfile((value) => ({ ...value, bio: event.target.value }))} placeholder="A few words about you" /></label>
+            <div className="profile-login">@{login}</div>
+            <button className="primary-button" type="submit">Save changes</button>
+          </form>
+        </Modal>
+      )}
+
+      {memberDialog && (
+        <Modal title={memberDialog === 'owner' ? 'Transfer ownership' : `${memberDialog[0].toUpperCase()}${memberDialog.slice(1)} member`} onClose={() => setMemberDialog(null)}>
+          <form className="modal-form" onSubmit={(event) => {
+            event.preventDefault()
+            if (memberDialog === 'owner') transferOwnership(memberLogin)
+            else groupMemberAction(memberDialog, memberLogin)
+          }}>
+            <label>Username<input value={memberLogin} autoFocus onChange={(event) => setMemberLogin(event.target.value)} placeholder="@username" /></label>
+            <button className="primary-button" type="submit" disabled={!memberLogin.trim()}>Continue</button>
+          </form>
+        </Modal>
+      )}
+
+      {editingMessage && (
+        <Modal title="Edit message" onClose={() => setEditingMessage(null)}>
+          <form className="modal-form" onSubmit={submitMessageEdit}>
+            <label>Message<textarea value={editText} rows={4} autoFocus maxLength={16384} onChange={(event) => setEditText(event.target.value)} /></label>
+            <button className="primary-button" type="submit" disabled={!editText.trim()}>Save message</button>
+          </form>
+        </Modal>
+      )}
     </div>
   )
 }
