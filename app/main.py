@@ -7,7 +7,7 @@ from redis.asyncio import Redis
 
 from .core.config import Settings
 from .db import create_database_engine, create_session_factory
-from .routers import auth, chats, messages, realtime, users
+from .routers import auth, chats, e2ee, messages, realtime, users
 from .services.realtime import ConnectionManager
 from .services.rate_limit import RateLimiter
 from .services.session_store import InMemorySessionStore, RedisSessionStore
@@ -69,6 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api_v1.include_router(auth.router)
     api_v1.include_router(users.router)
     api_v1.include_router(chats.router)
+    api_v1.include_router(e2ee.router)
     api_v1.include_router(messages.router)
     api_v1.include_router(realtime.router)
     application.include_router(api_v1)

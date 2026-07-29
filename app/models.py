@@ -95,8 +95,60 @@ class Device(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    identity_key: Mapped[Optional[bytes]] = mapped_column(LargeBinary)
+    identity_fingerprint: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        unique=True,
+        index=True,
+    )
+    identity_published_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     user: Mapped[User] = relationship(back_populates="devices")
+    key_packages: Mapped[list["MlsKeyPackage"]] = relationship(
+        back_populates="device",
+        foreign_keys="MlsKeyPackage.device_id",
+        cascade="all, delete-orphan",
+    )
+
+
+class MlsKeyPackage(Base):
+    __tablename__ = "mls_key_packages"
+    __table_args__ = (
+        CheckConstraint("length(key_package) BETWEEN 64 AND 65536", name="size"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    device_id: Mapped[str] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key_package: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    cipher_suite: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    claimed_by_device_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("devices.id", ondelete="SET NULL")
+    )
+
+    device: Mapped[Device] = relationship(
+        back_populates="key_packages",
+        foreign_keys=[device_id],
+    )
+    claimed_by_device: Mapped[Optional[Device]] = relationship(
+        foreign_keys=[claimed_by_device_id]
+    )
 
 
 class UserBlock(Base):

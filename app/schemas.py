@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, Base64Bytes, BaseModel, ConfigDict, Field
 
 
 class Credentials(BaseModel):
@@ -23,6 +23,32 @@ class DeviceResponse(BaseModel):
     created_at: datetime
     last_seen_at: datetime
     revoked_at: datetime | None
+
+
+class DeviceIdentityPublish(BaseModel):
+    identity_key: Base64Bytes = Field(min_length=32, max_length=128)
+
+
+class DeviceIdentityResponse(BaseModel):
+    device_id: str
+    login: str
+    identity_key: Base64Bytes
+    fingerprint: str
+    published_at: datetime
+
+
+class KeyPackagePublish(BaseModel):
+    key_packages: list[Base64Bytes] = Field(min_length=1, max_length=100)
+    cipher_suite: int = Field(default=1, ge=1, le=65535)
+    expires_at: datetime
+
+
+class KeyPackageResponse(BaseModel):
+    id: str
+    device_id: str
+    key_package: Base64Bytes
+    cipher_suite: int
+    expires_at: datetime
 
 
 class UserResponse(BaseModel):

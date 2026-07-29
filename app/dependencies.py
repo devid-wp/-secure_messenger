@@ -43,3 +43,25 @@ async def get_bearer_token(authorization: str | None = Header(None)) -> str:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized")
     return authorization.removeprefix("Bearer ")
+
+
+async def get_current_device(
+    request: Request,
+    token: str = Depends(get_bearer_token),
+    session: AsyncSession = Depends(get_db),
+) -> Device:
+    session_data = await request.app.state.session_store.resolve(token)
+    if session_data is None:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    device = await session.get(Device, session_data.device_id)
+    user = await session.get(User, session_data.user_id)
+    if (
+        device is None
+        or device.revoked_at is not None
+        or user is None
+        or not user.is_active
+        or user.is_placeholder
+    ):
+        await request.app.state.session_store.revoke(token)
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return device
