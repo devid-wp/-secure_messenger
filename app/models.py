@@ -132,12 +132,22 @@ class Chat(Base):
             "(type = 'dm' AND name IS NULL) OR type = 'group'",
             name="dm_has_no_name",
         ),
+        CheckConstraint(
+            "history_visibility IN ('all', 'since_join')",
+            name="history_visibility",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     type: Mapped[str] = mapped_column(String(16), nullable=False)
     name: Mapped[Optional[str]] = mapped_column(String(255))
     avatar_url: Mapped[Optional[str]] = mapped_column(String(2048))
+    history_visibility: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="since_join",
+        server_default="since_join",
+    )
     direct_key: Mapped[Optional[str]] = mapped_column(
         String(64),
         unique=True,
@@ -174,6 +184,7 @@ class ChatMember(Base):
     __tablename__ = "chat_members"
     __table_args__ = (
         CheckConstraint("role IN ('owner', 'admin', 'member')", name="role"),
+        CheckConstraint("history_from_seq > 0", name="history_from_seq"),
     )
 
     chat_id: Mapped[int] = mapped_column(
@@ -190,6 +201,12 @@ class ChatMember(Base):
         nullable=False,
         default="member",
         server_default="member",
+    )
+    history_from_seq: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
     )
     joined_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -246,6 +263,7 @@ class Message(Base):
             "(deleted_at IS NULL AND length(content) BETWEEN 1 AND 16384)",
             name="content_length",
         ),
+        CheckConstraint("kind IN ('user', 'system')", name="kind"),
         Index("ix_messages_chat_timestamp", "chat_id", "timestamp", "id"),
         UniqueConstraint(
             "sender_user_id",
@@ -269,6 +287,12 @@ class Message(Base):
         nullable=False,
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="user",
+        server_default="user",
+    )
     client_id: Mapped[Optional[str]] = mapped_column(String(36))
     server_seq: Mapped[int] = mapped_column(Integer, nullable=False)
     reply_to_id: Mapped[Optional[int]] = mapped_column(

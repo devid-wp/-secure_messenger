@@ -13,6 +13,7 @@ def serialize_chat(chat: Chat) -> dict:
             member.user.login: member.role for member in chat.members
         },
         "avatar_url": chat.avatar_url,
+        "history_visibility": chat.history_visibility,
     }
 
 
@@ -29,6 +30,7 @@ def serialize_message(message: Message, viewer_user_id: int | None = None) -> di
         "chat_id": message.chat_id,
         "sender": message.sender.login,
         "content": message.content,
+        "kind": message.kind,
         "client_id": message.client_id,
         "server_seq": message.server_seq,
         "status": status,

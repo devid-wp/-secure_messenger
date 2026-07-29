@@ -45,17 +45,26 @@ class ChatResponse(BaseModel):
     members: list[str]
     member_roles: dict[str, str]
     avatar_url: str | None
+    history_visibility: str
 
 
 class GroupCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     avatar_url: AnyHttpUrl | None = None
     member_logins: list[str] = Field(default_factory=list, max_length=99)
+    history_visibility: str = Field(
+        default="since_join",
+        pattern="^(all|since_join)$",
+    )
 
 
 class GroupUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     avatar_url: AnyHttpUrl | None = None
+    history_visibility: str | None = Field(
+        default=None,
+        pattern="^(all|since_join)$",
+    )
 
 
 class GroupMemberRequest(BaseModel):
@@ -78,11 +87,16 @@ class GroupInvitationResponse(BaseModel):
     expires_at: datetime
 
 
+class GroupOwnerTransferRequest(BaseModel):
+    login: str = Field(min_length=1, max_length=64)
+
+
 class MessageResponse(BaseModel):
     id: int
     chat_id: int
     sender: str
     content: str
+    kind: str
     client_id: str | None
     server_seq: int
     status: str

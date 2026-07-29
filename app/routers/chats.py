@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -16,9 +16,11 @@ from app.schemas import (
     GroupMemberRequest,
     GroupInvitationRequest,
     GroupInvitationResponse,
+    GroupOwnerTransferRequest,
     GroupUpdateRequest,
 )
 from app.services.serializers import serialize_chat
+from app.services.system_messages import append_system_message
 
 
 router = APIRouter(prefix="/chats", tags=["chats"])
@@ -194,6 +196,7 @@ async def create_group(
         type="group",
         name=name,
         avatar_url=str(request_body.avatar_url) if request_body.avatar_url else None,
+        history_visibility=request_body.history_visibility,
         created_by_user_id=current_user.id,
         members=[
             ChatMember(user_id=current_user.id, role="owner"),
@@ -214,7 +217,9 @@ async def _group_and_actor(
     session: AsyncSession,
 ) -> tuple[Chat, ChatMember]:
     group = await session.scalar(
-        select(Chat).where(Chat.id == chat_id, Chat.type == "group")
+        select(Chat)
+        .where(Chat.id == chat_id, Chat.type == "group")
+        .with_for_update()
     )
     actor = await session.get(ChatMember, (chat_id, actor_id))
     if group is None or actor is None:
@@ -228,10 +233,11 @@ async def _group_and_actor(
 async def add_group_member(
     chat_id: int,
     request_body: GroupMemberRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
-    _group, actor = await _group_and_actor(chat_id, current_user.id, session)
+    group, actor = await _group_and_actor(chat_id, current_user.id, session)
     if request_body.role == "admin" and actor.role != "owner":
         raise HTTPException(status_code=403, detail="Only owner can add admins")
     user = await session.scalar(
@@ -244,19 +250,35 @@ async def add_group_member(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     membership = await session.get(ChatMember, (chat_id, user.id))
+    event_content = None
     if membership is None:
         session.add(
             ChatMember(
                 chat_id=chat_id,
                 user_id=user.id,
                 role=request_body.role,
+                history_from_seq=group.next_message_seq,
             )
         )
+        event_content = f"{current_user.login} added {user.login} to the group"
     elif membership.role != request_body.role:
         if actor.role != "owner":
             raise HTTPException(status_code=403, detail="Only owner can change roles")
         membership.role = request_body.role
-    await session.commit()
+        event_content = (
+            f"{current_user.login} changed {user.login}'s role "
+            f"to {request_body.role}"
+        )
+    if event_content is None:
+        await session.commit()
+    else:
+        await append_system_message(
+            request,
+            session,
+            chat_id=chat_id,
+            actor_user_id=current_user.id,
+            content=event_content,
+        )
     group = await session.scalar(
         select(Chat).where(Chat.id == chat_id).options(*_chat_load_options())
     )
@@ -267,6 +289,7 @@ async def add_group_member(
 async def remove_group_member(
     chat_id: int,
     login: str,
+    request: Request,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
@@ -282,7 +305,89 @@ async def remove_group_member(
     if membership.role == "admin" and actor.role != "owner":
         raise HTTPException(status_code=403, detail="Only owner can remove admins")
     await session.delete(membership)
-    await session.commit()
+    await append_system_message(
+        request,
+        session,
+        chat_id=chat_id,
+        actor_user_id=current_user.id,
+        content=f"{current_user.login} removed {user.login} from the group",
+    )
+
+
+@router.delete("/groups/{chat_id}/leave", status_code=204)
+async def leave_group(
+    chat_id: int,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    group = await session.scalar(
+        select(Chat).where(Chat.id == chat_id, Chat.type == "group")
+    )
+    membership = await session.get(ChatMember, (chat_id, current_user.id))
+    if group is None or membership is None:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if membership.role == "owner":
+        raise HTTPException(
+            status_code=409,
+            detail="Transfer ownership before leaving the group",
+        )
+    await session.delete(membership)
+    await append_system_message(
+        request,
+        session,
+        chat_id=chat_id,
+        actor_user_id=current_user.id,
+        content=f"{current_user.login} left the group",
+    )
+
+
+@router.post("/groups/{chat_id}/owner", response_model=ChatResponse)
+async def transfer_group_ownership(
+    chat_id: int,
+    request_body: GroupOwnerTransferRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    group = await session.scalar(
+        select(Chat)
+        .where(Chat.id == chat_id, Chat.type == "group")
+        .with_for_update()
+    )
+    actor = await session.get(ChatMember, (chat_id, current_user.id))
+    if group is None or actor is None:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if actor.role != "owner":
+        raise HTTPException(status_code=403, detail="Only owner can transfer ownership")
+    target_user = await session.scalar(
+        select(User).where(User.login == request_body.login)
+    )
+    target = (
+        await session.get(ChatMember, (chat_id, target_user.id))
+        if target_user is not None
+        else None
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="Group member not found")
+    if target.user_id == current_user.id:
+        raise HTTPException(status_code=409, detail="User already owns the group")
+    actor.role = "admin"
+    target.role = "owner"
+    await append_system_message(
+        request,
+        session,
+        chat_id=chat_id,
+        actor_user_id=current_user.id,
+        content=(
+            f"{current_user.login} transferred group ownership "
+            f"to {target_user.login}"
+        ),
+    )
+    group = await session.scalar(
+        select(Chat).where(Chat.id == chat_id).options(*_chat_load_options())
+    )
+    return serialize_chat(group)
 
 
 @router.post(
@@ -376,6 +481,7 @@ async def list_pending_invitations(
 )
 async def accept_group_invitation(
     invitation_id: str,
+    request: Request,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
@@ -390,15 +496,23 @@ async def accept_group_invitation(
     if expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=410, detail="Invitation expired")
     if await session.get(ChatMember, (invitation.chat_id, current_user.id)) is None:
+        group = await session.get(Chat, invitation.chat_id)
         session.add(
             ChatMember(
                 chat_id=invitation.chat_id,
                 user_id=current_user.id,
                 role="member",
+                history_from_seq=group.next_message_seq,
             )
         )
     invitation.status = "accepted"
-    await session.commit()
+    await append_system_message(
+        request,
+        session,
+        chat_id=invitation.chat_id,
+        actor_user_id=current_user.id,
+        content=f"{current_user.login} joined the group",
+    )
     group = await session.scalar(
         select(Chat)
         .where(Chat.id == invitation.chat_id)
@@ -411,6 +525,7 @@ async def accept_group_invitation(
 async def update_group(
     chat_id: int,
     request_body: GroupUpdateRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
@@ -422,15 +537,42 @@ async def update_group(
         raise HTTPException(status_code=404, detail="Group not found")
     if membership.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
+    changes: list[str] = []
     if request_body.name is not None:
+        previous_name = group.name
         group.name = request_body.name.strip()
         if not group.name:
             raise HTTPException(status_code=400, detail="Group name cannot be blank")
+        if group.name != previous_name:
+            changes.append(f"renamed the group to {group.name}")
     if "avatar_url" in request_body.model_fields_set:
         group.avatar_url = (
             str(request_body.avatar_url) if request_body.avatar_url else None
         )
-    await session.commit()
+        changes.append("updated the group avatar")
+    if request_body.history_visibility is not None:
+        if membership.role != "owner":
+            raise HTTPException(
+                status_code=403,
+                detail="Only owner can change history access",
+            )
+        if group.history_visibility != request_body.history_visibility:
+            group.history_visibility = request_body.history_visibility
+            changes.append(
+                "made full history visible to new members"
+                if request_body.history_visibility == "all"
+                else "limited new members to history since joining"
+            )
+    if changes:
+        await append_system_message(
+            request,
+            session,
+            chat_id=chat_id,
+            actor_user_id=current_user.id,
+            content=f"{current_user.login} " + " and ".join(changes),
+        )
+    else:
+        await session.commit()
     group = await session.scalar(
         select(Chat).where(Chat.id == chat_id).options(*_chat_load_options())
     )

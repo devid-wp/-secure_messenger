@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_current_user, get_db
-from app.models import ChatMember, Message, User
+from app.models import Chat, ChatMember, Message, User
 from app.schemas import MessageEditRequest, MessagePage, MessageResponse
 from app.services.cursors import (
     InvalidCursor,
@@ -46,6 +46,15 @@ async def list_messages(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     statement = select(Message).where(Message.chat_id == chat_id)
+    chat = await session.get(Chat, chat_id)
+    if (
+        chat is not None
+        and chat.type == "group"
+        and chat.history_visibility == "since_join"
+    ):
+        statement = statement.where(
+            Message.server_seq >= membership.history_from_seq
+        )
     if before_id is not None:
         statement = statement.where(Message.id < before_id)
     rows = (
@@ -97,6 +106,8 @@ async def edit_message(
         raise HTTPException(status_code=404, detail="Message not found")
     if message.sender_user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Only the sender can edit")
+    if message.kind == "system":
+        raise HTTPException(status_code=403, detail="System messages cannot be edited")
     if message.deleted_at is not None:
         raise HTTPException(status_code=409, detail="Message is deleted")
     message.content = request_body.content.strip()
@@ -140,6 +151,8 @@ async def delete_message(
         raise HTTPException(status_code=404, detail="Message not found")
     if message.sender_user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Only the sender can delete")
+    if message.kind == "system":
+        raise HTTPException(status_code=403, detail="System messages cannot be deleted")
     if message.deleted_at is None:
         message.content = ""
         message.deleted_at = datetime.now(timezone.utc)
