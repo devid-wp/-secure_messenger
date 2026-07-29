@@ -884,11 +884,17 @@ function ChatApp({ token, login, onLogout }) {
                 )}
                 {selectedGroupRole === 'owner' && (
                   <>
+                    <div className="menu-separator" role="separator" />
                     <button type="button" onClick={() => { setMemberDialog('owner'); setChatMenuOpen(false) }}>Transfer ownership</button>
                     <button type="button" onClick={toggleHistoryVisibility}>Change history access</button>
                   </>
                 )}
-                {selectedConversation.type === 'group' && <button type="button" className="danger-action" onClick={leaveGroup}>Leave group</button>}
+                {selectedConversation.type === 'group' && (
+                  <>
+                    <div className="menu-separator" role="separator" />
+                    <button type="button" className="danger-action" onClick={leaveGroup}>Leave group</button>
+                  </>
+                )}
               </div>
             )}
         </div>

@@ -55,7 +55,7 @@ export function Avatar({ name, size = 40, src = null, online = false }) {
   }
   return (
     <span
-      className="avatar"
+      className={`avatar ${imageSource ? 'avatar--image' : ''}`}
       style={avatarStyle}
       aria-hidden="true"
     >
@@ -204,8 +204,8 @@ export function MessageComposer({ inputRef, value, onChange, onSubmit, conversat
     }
   }
   return (
-    <form className="message-composer" onSubmit={onSubmit}>
-      <button type="button" className="icon-button composer-attach" disabled title="Attachments require message-upload support" aria-label="Attachments unavailable">
+    <form className={`message-composer ${value.trim() ? 'has-content' : ''}`} onSubmit={onSubmit}>
+      <button type="button" className="icon-button composer-attach" disabled title="File attachments are coming soon" aria-label="File attachments are not available yet">
         <Icon name="attach" />
       </button>
       <div className="composer-input">
@@ -220,7 +220,13 @@ export function MessageComposer({ inputRef, value, onChange, onSubmit, conversat
           aria-label="Message"
         />
       </div>
-      <button type="submit" className="send-button" disabled={disabled || !value.trim()} title="Send message" aria-label="Send message">
+      <button
+        type="submit"
+        className="send-button"
+        disabled={disabled || !value.trim()}
+        title={value.trim() ? 'Send message' : 'Write a message to send'}
+        aria-label="Send message"
+      >
         <Icon name="send" />
       </button>
     </form>

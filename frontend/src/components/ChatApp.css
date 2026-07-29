@@ -255,11 +255,13 @@
 
 .contact-kind {
   align-self: start;
-  padding-top: 3px;
+  margin-right: 3px;
+  padding-top: 4px;
   color: var(--text-muted);
   font-size: 8px;
   font-weight: 700;
   letter-spacing: 0.1em;
+  opacity: 0.76;
 }
 
 .avatar {
@@ -284,6 +286,16 @@
   height: 100%;
   border-radius: inherit;
   object-fit: cover;
+}
+
+.avatar--image::after {
+  position: absolute;
+  inset: 1px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: inherit;
+  box-shadow: inset 0 1px 4px rgba(255, 255, 255, 0.08);
+  content: '';
+  pointer-events: none;
 }
 
 .avatar-status {
@@ -362,10 +374,10 @@
   position: relative;
   z-index: 8;
   display: flex;
-  min-height: 72px;
+  min-height: 76px;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 18px;
+  padding: 11px 20px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-header);
   box-shadow: var(--inner-highlight), var(--shadow-low);
@@ -403,7 +415,8 @@
 .chat-header__controls {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  padding-left: 18px;
 }
 
 .brand-mark {
@@ -500,11 +513,17 @@
 .main-menu button,
 .chat-actions-menu button {
   width: 100%;
-  padding: 10px 11px;
+  padding: 8px 10px;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   font-size: var(--font-size-sm);
   text-align: left;
+}
+
+.menu-separator {
+  height: 1px;
+  margin: 5px 7px;
+  background: linear-gradient(90deg, transparent, var(--border-medium), transparent);
 }
 
 .main-menu button:hover,
@@ -610,7 +629,9 @@
 }
 
 .empty-state p {
+  max-width: 340px;
   font-size: var(--font-size-sm);
+  line-height: 1.55;
 }
 
 .message {
@@ -829,13 +850,13 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-input);
-  box-shadow: var(--inner-highlight), var(--inner-shadow);
+  box-shadow: var(--inner-highlight), var(--inner-shadow), inset 0 0 18px rgba(109, 74, 255, 0.018);
   transition: border-color var(--duration-normal), box-shadow var(--duration-normal);
 }
 
 .composer-input:focus-within {
-  border-color: rgba(125, 92, 255, 0.38);
-  box-shadow: var(--inner-highlight), 0 0 0 3px rgba(109, 74, 255, 0.075), 0 10px 24px rgba(0, 0, 0, 0.14);
+  border-color: rgba(125, 92, 255, 0.5);
+  box-shadow: var(--inner-highlight), inset 0 0 22px rgba(109, 74, 255, 0.04), 0 0 0 3px rgba(109, 74, 255, 0.09), 0 10px 24px rgba(0, 0, 0, 0.16);
 }
 
 .composer-input textarea {
@@ -860,7 +881,25 @@
   background: linear-gradient(145deg, var(--accent-primary-hover), var(--accent-primary-active));
   box-shadow: var(--inner-highlight), 0 8px 20px rgba(44, 26, 111, 0.34);
   color: #fff;
-  transition: transform var(--duration-fast), filter var(--duration-fast);
+  transition: transform var(--duration-fast), filter var(--duration-fast), opacity var(--duration-normal), background var(--duration-normal), border-color var(--duration-normal), box-shadow var(--duration-normal);
+}
+
+.send-button:disabled {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-hover);
+  box-shadow: var(--inner-highlight);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.message-composer.has-content .send-button {
+  box-shadow: var(--inner-highlight), 0 8px 22px rgba(73, 46, 183, 0.42), 0 0 16px rgba(109, 74, 255, 0.1);
+}
+
+.composer-attach:disabled {
+  cursor: help;
+  opacity: 0.52;
 }
 
 .send-button:hover:not(:disabled) {
