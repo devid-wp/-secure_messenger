@@ -18,6 +18,8 @@ const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const WS_URL = API_URL
   ? API_URL.replace(/^http/, 'ws')
   : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+const MAX_AVATAR_BYTES = 50 * 1024 * 1024
+const AVATAR_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 
 function readOutbox(login) {
   try {
@@ -67,6 +69,10 @@ function ChatApp({ token, login, onLogout }) {
   const [historyRefresh, setHistoryRefresh] = useState(0)
   const [profile, setProfile] = useState({ login, display_name: '', bio: '', avatar_url: null })
   const [profileOpen, setProfileOpen] = useState(false)
+  const [profileAvatar, setProfileAvatar] = useState(null)
+  const [profileAvatarPreview, setProfileAvatarPreview] = useState(null)
+  const [profileFormError, setProfileFormError] = useState('')
+  const [profileSaving, setProfileSaving] = useState(false)
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [groupName, setGroupName] = useState('')
   const [groupAvatar, setGroupAvatar] = useState(null)
@@ -84,11 +90,18 @@ function ChatApp({ token, login, onLogout }) {
   const outboxRef = useRef(readOutbox(login))
   const reconnectTimerRef = useRef(null)
   const readReceiptsRef = useRef(new Set())
+  const profileAvatarPreviewRef = useRef(null)
 
   const authHeaders = useMemo(
     () => ({ Authorization: `Bearer ${token}` }),
     [token]
   )
+
+  useEffect(() => () => {
+    if (profileAvatarPreviewRef.current) {
+      URL.revokeObjectURL(profileAvatarPreviewRef.current)
+    }
+  }, [])
 
   const conversations = useMemo(() => {
     const existingDmUsers = new Set()
@@ -655,38 +668,88 @@ function ChatApp({ token, login, onLogout }) {
     setMemberLogin('')
   }
 
-  const saveProfile = async (event) => {
-    event.preventDefault()
-    let response = await fetch(`${API_URL}/api/v1/users/me`, {
-      method: 'PATCH',
-      headers: { ...authHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        display_name: profile.display_name || null,
-        bio: profile.bio || null,
-      }),
-    })
-    if (!response.ok) {
-      setError('Could not update profile')
+  const clearProfileAvatar = () => {
+    if (profileAvatarPreviewRef.current) {
+      URL.revokeObjectURL(profileAvatarPreviewRef.current)
+      profileAvatarPreviewRef.current = null
+    }
+    setProfileAvatar(null)
+    setProfileAvatarPreview(null)
+  }
+
+  const openProfile = () => {
+    clearProfileAvatar()
+    setProfileFormError('')
+    setProfileOpen(true)
+  }
+
+  const closeProfile = () => {
+    clearProfileAvatar()
+    setProfileFormError('')
+    setProfileOpen(false)
+  }
+
+  const selectProfileAvatar = (event) => {
+    const file = event.target.files[0] || null
+    clearProfileAvatar()
+    setProfileFormError('')
+    if (!file) return
+    if (!AVATAR_TYPES.has(file.type)) {
+      setProfileFormError('Choose a JPEG, PNG, or WebP image.')
+      event.target.value = ''
       return
     }
-    let updatedProfile = await response.json()
-    const avatarFile = event.currentTarget.elements.avatar.files[0]
-    if (avatarFile) {
-      const formData = new FormData()
-      formData.append('avatar', avatarFile)
-      response = await fetch(`${API_URL}/api/v1/users/me/avatar`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: formData,
+    if (file.size > MAX_AVATAR_BYTES) {
+      setProfileFormError('The photo must be 50 MB or smaller.')
+      event.target.value = ''
+      return
+    }
+    const previewUrl = URL.createObjectURL(file)
+    profileAvatarPreviewRef.current = previewUrl
+    setProfileAvatar(file)
+    setProfileAvatarPreview(previewUrl)
+  }
+
+  const saveProfile = async (event) => {
+    event.preventDefault()
+    setProfileFormError('')
+    setProfileSaving(true)
+    try {
+      if (profileAvatar) {
+        const formData = new FormData()
+        formData.append('avatar', profileAvatar)
+        const avatarResponse = await fetch(`${API_URL}/api/v1/users/me/avatar`, {
+          method: 'POST',
+          headers: authHeaders,
+          body: formData,
+        })
+        if (!avatarResponse.ok) {
+          setProfileFormError('The photo could not be uploaded. Check its format and try again.')
+          return
+        }
+      }
+
+      const response = await fetch(`${API_URL}/api/v1/users/me`, {
+        method: 'PATCH',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          display_name: profile.display_name || null,
+          bio: profile.bio || null,
+        }),
       })
       if (!response.ok) {
-        setError('Profile saved, but avatar upload failed')
+        setProfileFormError('The profile could not be saved. Please try again.')
         return
       }
-      updatedProfile = await response.json()
+      const updatedProfile = await response.json()
+      setProfile(updatedProfile)
+      setError('')
+      closeProfile()
+    } catch {
+      setProfileFormError('The server is unavailable. Please try again.')
+    } finally {
+      setProfileSaving(false)
     }
-    setProfile(updatedProfile)
-    setProfileOpen(false)
   }
 
   const leaveGroup = async () => {
@@ -761,7 +824,7 @@ function ChatApp({ token, login, onLogout }) {
           {mainMenuOpen && (
             <div className="main-menu">
               <button type="button" onClick={() => { setGroupDialogOpen(true); setMainMenuOpen(false) }}>New group</button>
-              <button type="button" onClick={() => { setProfileOpen(true); setMainMenuOpen(false) }}>My profile</button>
+              <button type="button" onClick={() => { openProfile(); setMainMenuOpen(false) }}>My profile</button>
               <button type="button" onClick={toggle}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
               <button type="button" className="danger-action" onClick={handleLogout}>Sign out</button>
             </div>
@@ -791,7 +854,7 @@ function ChatApp({ token, login, onLogout }) {
           </button>
         ))}
 
-        <button className="user-bar" type="button" onClick={() => setProfileOpen(true)}>
+        <button className="user-bar" type="button" onClick={openProfile}>
           <Avatar name={profile.display_name || login} size={42} src={profile.avatar_url} />
           <div className="user-bar__info">
             <div className="user-bar__name">{profile.display_name || login}</div>
@@ -927,17 +990,21 @@ function ChatApp({ token, login, onLogout }) {
       )}
 
       {profileOpen && (
-        <Modal title="Edit profile" onClose={() => setProfileOpen(false)}>
+        <Modal title="Edit profile" onClose={closeProfile}>
           <form className="modal-form" onSubmit={saveProfile}>
             <label className="photo-picker">
-              <Avatar name={profile.display_name || login} size={92} src={profile.avatar_url} />
-              <span>Upload a new photo</span>
-              <input name="avatar" type="file" accept="image/jpeg,image/png,image/webp" />
+              <Avatar name={profile.display_name || login} size={92} src={profileAvatarPreview || profile.avatar_url} />
+              <span>{profileAvatar ? 'Choose another photo' : 'Upload a new photo'}</span>
+              {profileAvatar && <small className="photo-picker__file">{profileAvatar.name}</small>}
+              <input name="avatar" type="file" accept="image/jpeg,image/png,image/webp" onChange={selectProfileAvatar} />
             </label>
             <label>Display name<input value={profile.display_name || ''} maxLength={64} onChange={(event) => setProfile((value) => ({ ...value, display_name: event.target.value }))} /></label>
             <label>Bio<textarea value={profile.bio || ''} maxLength={160} rows={3} onChange={(event) => setProfile((value) => ({ ...value, bio: event.target.value }))} placeholder="A few words about you" /></label>
             <div className="profile-login">@{login}</div>
-            <button className="primary-button" type="submit">Save changes</button>
+            {profileFormError && <p className="profile-form-error" role="alert">{profileFormError}</p>}
+            <button className="primary-button" type="submit" disabled={profileSaving}>
+              {profileSaving ? 'Saving…' : 'Save changes'}
+            </button>
           </form>
         </Modal>
       )}

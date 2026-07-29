@@ -957,6 +957,26 @@
   opacity: 0;
 }
 
+.photo-picker__file {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-form-error {
+  margin: -4px 0 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 104, 122, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 104, 122, 0.08);
+  color: #ff9eaa;
+  font-size: var(--font-size-xs);
+}
+
 .primary-button {
   padding: 11px 16px;
   border: 1px solid rgba(160, 137, 255, 0.26);
@@ -965,6 +985,11 @@
   box-shadow: var(--inner-highlight), 0 8px 20px rgba(44, 26, 111, 0.24);
   color: #fff;
   font-weight: 650;
+}
+
+.primary-button:disabled {
+  cursor: wait;
+  opacity: 0.64;
 }
 
 .profile-login {
