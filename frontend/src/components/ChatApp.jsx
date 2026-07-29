@@ -1,5 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from '../ThemeContext'
+import {
+  Avatar,
+  ChatHeader,
+  ContactListItem,
+  EmptyState,
+  Icon,
+  MessageActions,
+  MessageComposer,
+  MessageStatus,
+  Modal,
+  SearchInput,
+} from './MessengerUI'
 import './ChatApp.css'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
@@ -19,52 +31,6 @@ function writeOutbox(login, items) {
   localStorage.setItem(`outbox:${login}`, JSON.stringify(items))
 }
 
-const AVATAR_COLORS = [
-  '#5865f2', '#3ba55d', '#faa61a', '#ed4245',
-  '#9b59b6', '#1abc9c', '#e67e22', '#e84393',
-]
-
-function avatarColor(login) {
-  let hash = 0
-  for (let i = 0; i < login.length; i++) {
-    hash = login.charCodeAt(i) + ((hash << 5) - hash)
-  }
-  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length]
-}
-
-function Avatar({ name, size = 40, src = null }) {
-  const safeName = name || '?'
-  const imageSource = src?.startsWith('/') ? `${API_URL}${src}` : src
-  return (
-    <div
-      className="avatar"
-      style={{
-        width: size,
-        height: size,
-        fontSize: size * 0.45,
-        backgroundColor: avatarColor(safeName),
-      }}
-      aria-hidden="true"
-    >
-      {imageSource ? <img src={imageSource} alt="" /> : safeName.charAt(0).toUpperCase()}
-    </div>
-  )
-}
-
-function Modal({ title, children, onClose }) {
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="modal-card" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
-        <header className="modal-card__header">
-          <h2>{title}</h2>
-          <button type="button" className="icon-btn" onClick={onClose}>×</button>
-        </header>
-        {children}
-      </section>
-    </div>
-  )
-}
-
 function chatTitle(chat, currentLogin) {
   if (chat.type === 'group') {
     return chat.name || `Group #${chat.id}`
@@ -82,14 +48,6 @@ function messageTime(timestamp) {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-const STATUS_LABELS = {
-  sending: 'sending…',
-  sent: 'sent',
-  delivered: 'delivered',
-  read: 'read',
-  failed: 'failed — retrying when connected',
 }
 
 function ChatApp({ token, login, onLogout }) {
@@ -148,6 +106,7 @@ function ChatApp({ token, login, onLogout }) {
         type: chat.type,
         memberRoles: chat.member_roles,
         historyVisibility: chat.history_visibility,
+        memberCount: chat.members.length,
       }
     })
     const newDirectChats = searchResults
@@ -157,7 +116,11 @@ function ChatApp({ token, login, onLogout }) {
         chatId: null,
         label: user.login,
         userLogin: user.login,
+        avatarUrl: user.avatar_url,
         type: 'dm',
+        memberRoles: null,
+        historyVisibility: null,
+        memberCount: 2,
       }))
     return [...existingChats, ...newDirectChats]
   }, [chats, login, searchResults])
@@ -228,7 +191,6 @@ function ChatApp({ token, login, onLogout }) {
   useEffect(() => {
     const query = searchQuery.trim()
     if (query.length < 2) {
-      setSearchResults([])
       return undefined
     }
     const controller = new AbortController()
@@ -256,7 +218,6 @@ function ChatApp({ token, login, onLogout }) {
 
   useEffect(() => {
     if (selectedChatId === null) {
-      setMessages([])
       return undefined
     }
 
@@ -286,6 +247,8 @@ function ChatApp({ token, login, onLogout }) {
       }
     }
 
+    // A chat change must discard the previous chat before the async page arrives.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMessages([])
     setNextCursor(null)
     loadMessages()
@@ -441,7 +404,7 @@ function ChatApp({ token, login, onLogout }) {
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [token])
+  }, [login, token])
 
   useEffect(() => {
     const ws = wsRef.current
@@ -773,13 +736,28 @@ function ChatApp({ token, login, onLogout }) {
     onLogout()
   }
 
+  const handleSearchChange = (event) => {
+    const value = event.target.value
+    setSearchQuery(value)
+    if (value.trim().length < 2) setSearchResults([])
+  }
+
+  const showConversationList = () => {
+    setSelectedChatId(null)
+    setMessages([])
+    setChatMenuOpen(false)
+  }
+
   return (
-    <div className="chat-container">
+    <div className={`chat-container ${selectedChatId !== null ? 'mobile-chat-open' : ''}`}>
       <aside className="channel-panel" aria-label="Conversations">
         <header className="channel-header">
-          <button className="brand-menu" type="button" onClick={() => setMainMenuOpen((value) => !value)}>☰</button>
-          <h2>Secure Messenger</h2>
-          <button className="new-chat-button" type="button" onClick={() => setGroupDialogOpen(true)}>✎</button>
+          <button className="brand-menu icon-button" type="button" onClick={() => setMainMenuOpen((value) => !value)} aria-label="Main menu"><Icon name="menu" /></button>
+          <div className="channel-brand">
+            <h1><span className="brand-diamond" />Secure Messenger</h1>
+            <span>PRIVATE COMMUNICATION</span>
+          </div>
+          <button className="new-chat-button icon-button" type="button" onClick={() => setGroupDialogOpen(true)} aria-label="Create group"><Icon name="compose" /></button>
           {mainMenuOpen && (
             <div className="main-menu">
               <button type="button" onClick={() => { setGroupDialogOpen(true); setMainMenuOpen(false) }}>New group</button>
@@ -790,34 +768,15 @@ function ChatApp({ token, login, onLogout }) {
           )}
         </header>
 
-        <div className="user-search">
-          <input
-            type="search"
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search"
-            aria-label="Search users"
-          />
-        </div>
+        <div className="user-search"><SearchInput value={searchQuery} onChange={handleSearchChange} /></div>
         <nav className="channel-list">
           {conversations.map((conversation) => (
-            <button
+            <ContactListItem
               key={conversation.key}
-              className={`channel-item ${
-                selectedChatId === conversation.chatId
-                && conversation.chatId !== null
-                  ? 'active'
-                  : ''
-              }`}
-              onClick={() => selectConversation(conversation)}
-            >
-              <Avatar
-                name={conversation.label}
-                size={32}
-                src={conversation.avatarUrl}
-              />
-              <span className="channel-name">{conversation.label}</span>
-            </button>
+              conversation={conversation}
+              active={selectedChatId === conversation.chatId && conversation.chatId !== null}
+              onSelect={() => selectConversation(conversation)}
+            />
           ))}
         </nav>
 
@@ -836,22 +795,20 @@ function ChatApp({ token, login, onLogout }) {
           <Avatar name={profile.display_name || login} size={42} src={profile.avatar_url} />
           <div className="user-bar__info">
             <div className="user-bar__name">{profile.display_name || login}</div>
-            <div className="user-bar__status">online</div>
+            <div className="user-bar__status">@{login}</div>
           </div>
-          <span className="user-bar__chevron">›</span>
+          <Icon name="more" size={17} />
         </button>
       </aside>
 
       <main className="chat-panel">
-        <header className="chat-header">
-          <div className="chat-header__title">
-            {selectedConversation && <Avatar name={selectedConversation.label} size={40} src={selectedConversation.avatarUrl} />}
-            <span>{selectedConversation?.label || 'Select a conversation'}</span>
-          </div>
-          <div className="chat-header__meta">
-            <span className={`status-dot ${wsReady ? 'online' : 'offline'}`} />
-            <span>{wsReady ? 'online' : 'connecting...'}</span>
-            {selectedConversation && <button type="button" className="chat-menu-button" onClick={() => setChatMenuOpen((value) => !value)}>⋮</button>}
+        <ChatHeader
+          conversation={selectedConversation}
+          connected={wsReady}
+          onBack={showConversationList}
+          onMenu={() => setChatMenuOpen((value) => !value)}
+        />
+        <div className="chat-menu-anchor">
             {chatMenuOpen && selectedConversation && (
               <div className="chat-actions-menu">
                 {selectedConversation.type === 'dm' && <button type="button" onClick={blockSelectedUser}>Block user</button>}
@@ -871,10 +828,10 @@ function ChatApp({ token, login, onLogout }) {
                 {selectedConversation.type === 'group' && <button type="button" className="danger-action" onClick={leaveGroup}>Leave group</button>}
               </div>
             )}
-          </div>
-        </header>
+        </div>
 
-        <div className="messages-list">
+        <div className="messages-list" key={selectedChatId ?? 'empty'}>
+          {!wsReady && <div className="offline-banner">Connection interrupted. Queued messages will retry automatically.</div>}
           {error && <p className="error-message">{error}</p>}
           {nextCursor && (
             <button
@@ -886,18 +843,13 @@ function ChatApp({ token, login, onLogout }) {
               {loadingOlder ? 'Loading…' : 'Load earlier messages'}
             </button>
           )}
-          {messages.length === 0 && (
-            <div className="messages-empty">
-              <div className="messages-empty__icon">💬</div>
-              <p>
-                {selectedChatId === null
-                  ? 'Select a conversation on the left.'
-                  : 'No messages yet. Start the conversation!'}
-              </p>
-            </div>
-          )}
-          {messages.map((message) => {
+          {messages.length === 0 && <EmptyState hasConversation={selectedChatId !== null} />}
+          {messages.map((message, index) => {
             const own = message.sender === login
+            const previous = messages[index - 1]
+            const grouped = previous?.sender === message.sender
+              && previous.kind !== 'system'
+              && message.kind !== 'system'
             if (message.kind === 'system') {
               return (
                 <div key={message.id} className="system-message">
@@ -909,9 +861,9 @@ function ChatApp({ token, login, onLogout }) {
             return (
               <div
                 key={message.id}
-                className={`message ${own ? 'own' : 'other'}`}
+                className={`message ${own ? 'own' : 'other'} ${grouped ? 'grouped' : ''}`}
               >
-                {!own && <Avatar name={message.sender} size={40} />}
+                {!own && !grouped ? <Avatar name={message.sender} size={36} /> : !own ? <span className="message-avatar-spacer" /> : null}
                 <div className="message__body">
                   {message.reply_to_server_seq && (
                     <div className="message__reply">
@@ -926,42 +878,14 @@ function ChatApp({ token, login, onLogout }) {
                       {message.deleted_at ? 'Message deleted' : message.content}
                     </span>
                   </div>
-                  {!message.deleted_at && message.server_seq && (
-                    <div className="message__actions">
-                      <button
-                        type="button"
-                        onClick={() => setReplyingTo(message)}
-                      >
-                        Reply
-                      </button>
-                      {own && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => editMessage(message)}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => deleteMessage(message)}
-                          >
-                            Delete
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )}
                   <span className="message__time">
                     {messageTime(message.timestamp)}
-                    {message.edited_at && !message.deleted_at && ' · edited'}
-                    {own && message.status && (
-                      <span className={`message__status message__status--${message.status}`}>
-                        {' · '}
-                        {STATUS_LABELS[message.status] || message.status}
-                      </span>
-                    )}
+                    {message.edited_at && !message.deleted_at && <span className="edited-label">edited</span>}
+                    {own && <MessageStatus status={message.status} />}
                   </span>
+                  {!message.deleted_at && message.server_seq && (
+                    <MessageActions message={message} own={own} onReply={setReplyingTo} onEdit={editMessage} onDelete={deleteMessage} />
+                  )}
                 </div>
               </div>
             )
@@ -978,40 +902,14 @@ function ChatApp({ token, login, onLogout }) {
             <button type="button" onClick={() => setReplyingTo(null)}>×</button>
           </div>
         )}
-        <form className="message-input-form" onSubmit={sendMessage}>
-          <button
-            type="button"
-            className="icon-btn icon-btn--large"
-            disabled
-            title="Attachments (coming soon)"
-            aria-label="Attachments"
-          >
-            📎
-          </button>
-          <div className="message-input-wrapper">
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder={
-                selectedConversation
-                  ? `Message ${selectedConversation.label}`
-                  : 'Select a conversation first'
-              }
-              value={inputText}
-              onChange={(event) => setInputText(event.target.value)}
-              disabled={selectedChatId === null}
-            />
-          </div>
-          <button
-            type="submit"
-            className="icon-btn icon-btn--accent"
-            disabled={selectedChatId === null || !inputText.trim()}
-            title="Send"
-            aria-label="Send"
-          >
-            ➤
-          </button>
-        </form>
+        <MessageComposer
+          inputRef={inputRef}
+          value={inputText}
+          onChange={(event) => setInputText(event.target.value)}
+          onSubmit={sendMessage}
+          conversation={selectedConversation}
+          disabled={selectedChatId === null}
+        />
       </main>
 
       {groupDialogOpen && (
