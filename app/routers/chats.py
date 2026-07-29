@@ -1,3 +1,6 @@
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,12 +8,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_current_user, get_db
-from app.models import Chat, ChatMember, User, UserBlock
+from app.models import Chat, ChatInvitation, ChatMember, User, UserBlock
 from app.schemas import (
     ChatResponse,
     DirectChatRequest,
     GroupCreateRequest,
     GroupMemberRequest,
+    GroupInvitationRequest,
+    GroupInvitationResponse,
     GroupUpdateRequest,
 )
 from app.services.serializers import serialize_chat
@@ -24,6 +29,19 @@ def _chat_load_options():
         selectinload(Chat.creator),
         selectinload(Chat.members).selectinload(ChatMember.user),
     )
+
+
+def _serialize_invitation(invitation: ChatInvitation) -> dict:
+    return {
+        "id": invitation.id,
+        "chat_id": invitation.chat_id,
+        "group_name": invitation.chat.name,
+        "inviter": invitation.inviter.login,
+        "invitee": invitation.invitee.login,
+        "status": invitation.status,
+        "created_at": invitation.created_at,
+        "expires_at": invitation.expires_at,
+    }
 
 
 @router.get("", response_model=list[ChatResponse])
@@ -265,6 +283,128 @@ async def remove_group_member(
         raise HTTPException(status_code=403, detail="Only owner can remove admins")
     await session.delete(membership)
     await session.commit()
+
+
+@router.post(
+    "/groups/{chat_id}/invitations",
+    response_model=GroupInvitationResponse,
+    status_code=201,
+)
+async def invite_group_member(
+    chat_id: int,
+    request_body: GroupInvitationRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    group, _actor = await _group_and_actor(chat_id, current_user.id, session)
+    invitee = await session.scalar(
+        select(User).where(
+            User.login == request_body.login,
+            User.is_active.is_(True),
+            User.is_placeholder.is_(False),
+        )
+    )
+    if invitee is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if await session.get(ChatMember, (chat_id, invitee.id)) is not None:
+        raise HTTPException(status_code=409, detail="User is already a member")
+    invitation = await session.scalar(
+        select(ChatInvitation)
+        .where(
+            ChatInvitation.chat_id == chat_id,
+            ChatInvitation.invitee_user_id == invitee.id,
+            ChatInvitation.status == "pending",
+        )
+        .options(
+            selectinload(ChatInvitation.chat),
+            selectinload(ChatInvitation.inviter),
+            selectinload(ChatInvitation.invitee),
+        )
+    )
+    if invitation is None:
+        invitation = ChatInvitation(
+            id=str(uuid4()),
+            chat_id=chat_id,
+            inviter_user_id=current_user.id,
+            invitee_user_id=invitee.id,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        )
+        session.add(invitation)
+        await session.commit()
+        invitation = await session.scalar(
+            select(ChatInvitation)
+            .where(ChatInvitation.id == invitation.id)
+            .options(
+                selectinload(ChatInvitation.chat),
+                selectinload(ChatInvitation.inviter),
+                selectinload(ChatInvitation.invitee),
+            )
+        )
+    return _serialize_invitation(invitation)
+
+
+@router.get(
+    "/groups/invitations/pending",
+    response_model=list[GroupInvitationResponse],
+)
+async def list_pending_invitations(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    invitations = list(
+        await session.scalars(
+            select(ChatInvitation)
+            .where(
+                ChatInvitation.invitee_user_id == current_user.id,
+                ChatInvitation.status == "pending",
+                ChatInvitation.expires_at > datetime.now(timezone.utc),
+            )
+            .options(
+                selectinload(ChatInvitation.chat),
+                selectinload(ChatInvitation.inviter),
+                selectinload(ChatInvitation.invitee),
+            )
+            .order_by(ChatInvitation.created_at.desc())
+        )
+    )
+    return [_serialize_invitation(item) for item in invitations]
+
+
+@router.post(
+    "/groups/invitations/{invitation_id}/accept",
+    response_model=ChatResponse,
+)
+async def accept_group_invitation(
+    invitation_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    invitation = await session.get(ChatInvitation, invitation_id)
+    if invitation is None or invitation.invitee_user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    if invitation.status != "pending":
+        raise HTTPException(status_code=409, detail="Invitation is not pending")
+    expires_at = invitation.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="Invitation expired")
+    if await session.get(ChatMember, (invitation.chat_id, current_user.id)) is None:
+        session.add(
+            ChatMember(
+                chat_id=invitation.chat_id,
+                user_id=current_user.id,
+                role="member",
+            )
+        )
+    invitation.status = "accepted"
+    await session.commit()
+    group = await session.scalar(
+        select(Chat)
+        .where(Chat.id == invitation.chat_id)
+        .options(*_chat_load_options())
+    )
+    return serialize_chat(group)
 
 
 @router.patch("/groups/{chat_id}", response_model=ChatResponse)

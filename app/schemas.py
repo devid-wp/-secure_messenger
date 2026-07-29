@@ -63,6 +63,21 @@ class GroupMemberRequest(BaseModel):
     role: str = Field(default="member", pattern="^(admin|member)$")
 
 
+class GroupInvitationRequest(BaseModel):
+    login: str = Field(min_length=1, max_length=64)
+
+
+class GroupInvitationResponse(BaseModel):
+    id: str
+    chat_id: int
+    group_name: str
+    inviter: str
+    invitee: str
+    status: str
+    created_at: datetime
+    expires_at: datetime
+
+
 class MessageResponse(BaseModel):
     id: int
     chat_id: int

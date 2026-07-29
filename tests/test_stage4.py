@@ -64,3 +64,29 @@ class GroupApiTests(DirectMessagesApiTests):
             headers=self.headers(admin),
         )
         self.assertEqual(removed.status_code, 204)
+
+    def test_invitee_accepts_expiring_group_invitation(self) -> None:
+        owner = self.register_and_login("owner")
+        bob = self.register_and_login("bob")
+        group = self.client.post(
+            "/api/v1/chats/groups",
+            headers=self.headers(owner),
+            json={"name": "Invite only"},
+        ).json()
+        invited = self.client.post(
+            f"/api/v1/chats/groups/{group['id']}/invitations",
+            headers=self.headers(owner),
+            json={"login": "bob"},
+        )
+        self.assertEqual(invited.status_code, 201, invited.text)
+        pending = self.client.get(
+            "/api/v1/chats/groups/invitations/pending",
+            headers=self.headers(bob),
+        )
+        self.assertEqual(len(pending.json()), 1)
+        accepted = self.client.post(
+            f"/api/v1/chats/groups/invitations/{invited.json()['id']}/accept",
+            headers=self.headers(bob),
+        )
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertIn("bob", accepted.json()["members"])

@@ -201,6 +201,43 @@ class ChatMember(Base):
     user: Mapped[User] = relationship(back_populates="memberships")
 
 
+class ChatInvitation(Base):
+    __tablename__ = "chat_invitations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'accepted', 'revoked')",
+            name="status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    inviter_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    invitee_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    chat: Mapped[Chat] = relationship()
+    inviter: Mapped[User] = relationship(foreign_keys=[inviter_user_id])
+    invitee: Mapped[User] = relationship(foreign_keys=[invitee_user_id])
+
+
 class Message(Base):
     __tablename__ = "messages"
     __table_args__ = (
