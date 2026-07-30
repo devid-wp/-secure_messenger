@@ -168,9 +168,10 @@ async def block_user(
         raise HTTPException(status_code=404, detail="User not found")
     if other.id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot block yourself")
-    if await session.get(UserBlock, (current_user.id, other.id)) is None:
-        session.add(UserBlock(blocker_id=current_user.id, blocked_id=other.id))
-        await session.commit()
+    if await session.get(UserBlock, (current_user.id, other.id)) is not None:
+        raise HTTPException(status_code=409, detail="User is already blocked")
+    session.add(UserBlock(blocker_id=current_user.id, blocked_id=other.id))
+    await session.commit()
 
 
 @router.delete("/{login}/block", status_code=204)
@@ -183,6 +184,7 @@ async def unblock_user(
     if other is None:
         raise HTTPException(status_code=404, detail="User not found")
     block = await session.get(UserBlock, (current_user.id, other.id))
-    if block is not None:
-        await session.delete(block)
-        await session.commit()
+    if block is None:
+        raise HTTPException(status_code=409, detail="User is not blocked")
+    await session.delete(block)
+    await session.commit()

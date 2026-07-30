@@ -510,6 +510,11 @@ class DirectMessagesApiTests(unittest.TestCase):
             headers=self.headers(alice_token),
         )
         self.assertEqual(blocked.status_code, 204, blocked.text)
+        duplicate_block = self.client.post(
+            "/api/v1/users/bob/block",
+            headers=self.headers(alice_token),
+        )
+        self.assertEqual(duplicate_block.status_code, 409)
         search = self.client.get(
             "/api/v1/users/search",
             params={"q": "ali"},
