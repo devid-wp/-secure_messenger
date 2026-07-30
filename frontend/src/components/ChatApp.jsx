@@ -254,6 +254,7 @@ function ChatApp({ token, login, onLogout }) {
   const [messagesLoading, setMessagesLoading] = useState(false)
   const [replyingTo, setReplyingTo] = useState(null)
   const [invitations, setInvitations] = useState([])
+  const [blockedUsers, setBlockedUsers] = useState([])
   const [inputText, setInputText] = useState('')
   const [error, setError] = useState('')
   const [wsReady, setWsReady] = useState(false)
@@ -288,6 +289,7 @@ function ChatApp({ token, login, onLogout }) {
   const [groupAvatar, setGroupAvatar] = useState(null)
   const [memberDialog, setMemberDialog] = useState(null)
   const [memberLogin, setMemberLogin] = useState('')
+  const [memberBusy, setMemberBusy] = useState(false)
   const [mainMenuOpen, setMainMenuOpen] = useState(false)
   const [chatMenuOpen, setChatMenuOpen] = useState(false)
   const [editingMessage, setEditingMessage] = useState(null)
@@ -393,6 +395,35 @@ function ChatApp({ token, login, onLogout }) {
     (conversation) => conversation.chatId === selectedChatId
   )
   const selectedGroupRole = selectedConversation?.memberRoles?.[login]
+  const knownPeople = useMemo(() => {
+    const people = new Map()
+    for (const chat of chats) {
+      if (chat.type === 'dm' && chat.peer) people.set(chat.peer.login, chat.peer)
+    }
+    return [...people.values()].sort((left, right) => (
+      (left.display_name || left.username).localeCompare(right.display_name || right.username)
+    ))
+  }, [chats])
+  const memberCandidates = useMemo(() => {
+    if (!memberDialog || !selectedConversation) return []
+    const memberLogins = new Set(Object.keys(selectedConversation.memberRoles || {}))
+    if (['invite', 'add'].includes(memberDialog)) {
+      return knownPeople.filter((person) => !memberLogins.has(person.login))
+    }
+    return [...memberLogins]
+      .filter((member) => member !== login)
+      .map((member) => knownPeople.find((person) => person.login === member) || {
+        id: null,
+        login: member,
+        username: member,
+        display_name: null,
+        avatar_url: null,
+      })
+  }, [knownPeople, login, memberDialog, selectedConversation])
+  const selectedUserIsBlocked = Boolean(
+    selectedConversation?.userLogin
+    && blockedUsers.some((user) => user.login === selectedConversation.userLogin)
+  )
 
   useEffect(() => {
     selectedChatIdRef.current = selectedChatId
@@ -411,19 +442,20 @@ function ChatApp({ token, login, onLogout }) {
 
     const loadWorkspace = async () => {
       try {
-        const [dmResponse, groupsResponse, invitationsResponse, profileResponse] = await Promise.all([
+        const [dmResponse, groupsResponse, invitationsResponse, profileResponse, blocksResponse] = await Promise.all([
           fetch(`${API_URL}/api/v1/chats/dm`, { headers: authHeaders }),
           fetch(`${API_URL}/api/v1/chats/groups`, { headers: authHeaders }),
           fetch(`${API_URL}/api/v1/chats/groups/invitations/pending`, {
             headers: authHeaders,
           }),
           fetch(`${API_URL}/api/v1/users/me`, { headers: authHeaders }),
+          fetch(`${API_URL}/api/v1/users/blocks`, { headers: authHeaders }),
         ])
         if (dmResponse.status === 401) {
           onLogout()
           return
         }
-        if (!dmResponse.ok || !groupsResponse.ok || !invitationsResponse.ok || !profileResponse.ok) {
+        if (!dmResponse.ok || !groupsResponse.ok || !invitationsResponse.ok || !profileResponse.ok || !blocksResponse.ok) {
           throw new Error('Could not load conversations')
         }
 
@@ -433,10 +465,12 @@ function ChatApp({ token, login, onLogout }) {
         ]
         const invitationData = await invitationsResponse.json()
         const profileData = await profileResponse.json()
+        const blockedPeople = await blocksResponse.json()
         if (cancelled) return
         setChats(chatData)
         setInvitations(invitationData)
         setProfile(profileData)
+        setBlockedUsers(blockedPeople)
         setSelectedChatId((currentId) => {
           if (chatData.some((chat) => chat.id === currentId)) return currentId
           return chatData[0]?.id ?? null
@@ -844,15 +878,42 @@ function ChatApp({ token, login, onLogout }) {
 
   const blockSelectedUser = async () => {
     const otherLogin = selectedConversation?.userLogin
-    if (!otherLogin || !window.confirm(`Block ${otherLogin}?`)) return
+    if (!otherLogin || selectedUserIsBlocked || !window.confirm(`Block @${selectedConversation.username}?`)) return
     const response = await fetch(
       `${API_URL}/api/v1/users/${encodeURIComponent(otherLogin)}/block`,
       { method: 'POST', headers: authHeaders }
     )
     if (response.ok) {
-      setError(`${otherLogin} has been blocked`)
+      setBlockedUsers((previous) => [
+        ...previous.filter((user) => user.login !== otherLogin),
+        {
+          id: selectedConversation.stableUserId,
+          login: otherLogin,
+          username: selectedConversation.username,
+          display_name: selectedConversation.label,
+          avatar_url: selectedConversation.avatarUrl,
+        },
+      ])
+      setChatMenuOpen(false)
+      setError(`@${selectedConversation.username} has been blocked`)
     } else {
       setError('Could not block the user')
+    }
+  }
+
+  const unblockSelectedUser = async () => {
+    const otherLogin = selectedConversation?.userLogin
+    if (!otherLogin || !selectedUserIsBlocked) return
+    const response = await fetch(
+      `${API_URL}/api/v1/users/${encodeURIComponent(otherLogin)}/block`,
+      { method: 'DELETE', headers: authHeaders }
+    )
+    if (response.ok) {
+      setBlockedUsers((previous) => previous.filter((user) => user.login !== otherLogin))
+      setChatMenuOpen(false)
+      setError(`@${selectedConversation.username} has been unblocked`)
+    } else {
+      setError('Could not unblock the user')
     }
   }
 
@@ -886,21 +947,24 @@ function ChatApp({ token, login, onLogout }) {
   }
 
   const groupMemberAction = async (action, loginValue) => {
-    if (!loginValue || !selectedChatId) return
+    const normalizedLogin = loginValue.trim().replace(/^@/, '')
+    if (!normalizedLogin || !selectedChatId || memberBusy) return
+    setMemberBusy(true)
     const paths = {
       invite: `invitations`,
       add: `members`,
-      remove: `members/${encodeURIComponent(loginValue)}`,
+      remove: `members/${encodeURIComponent(normalizedLogin)}`,
     }
     const response = await fetch(
       `${API_URL}/api/v1/chats/groups/${selectedChatId}/${paths[action]}`,
       {
         method: action === 'remove' ? 'DELETE' : 'POST',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: action === 'remove' ? undefined : JSON.stringify({ login: loginValue }),
+        body: action === 'remove' ? undefined : JSON.stringify({ login: normalizedLogin }),
       }
     )
-    setError(response.ok ? 'Group updated' : 'Member operation failed')
+    const responseBody = response.ok ? null : await response.json().catch(() => null)
+    setError(response.ok ? 'Group updated' : (responseBody?.detail || 'Member operation failed'))
     if (response.ok && action === 'add') {
       const group = await response.json()
       setChats((previous) => previous.map((item) => (
@@ -911,6 +975,7 @@ function ChatApp({ token, login, onLogout }) {
       setMemberDialog(null)
       setMemberLogin('')
     }
+    setMemberBusy(false)
   }
 
   const acceptInvitation = async (invitation) => {
@@ -1516,7 +1581,11 @@ function ChatApp({ token, login, onLogout }) {
         <div className="chat-menu-anchor">
             {chatMenuOpen && selectedConversation && (
               <div className="chat-actions-menu" role="menu">
-                {selectedConversation.type === 'dm' && <button type="button" onClick={blockSelectedUser}>Block user</button>}
+                {selectedConversation.type === 'dm' && (
+                  selectedUserIsBlocked
+                    ? <button type="button" className="restore-action" onClick={unblockSelectedUser}>Unblock @{selectedConversation.username}</button>
+                    : <button type="button" className="danger-action" onClick={blockSelectedUser}>Block @{selectedConversation.username}</button>
+                )}
                 {selectedConversation.type === 'group' && ['owner', 'admin'].includes(selectedGroupRole) && (
                   <>
                     <button type="button" onClick={() => { setMemberDialog('invite'); setChatMenuOpen(false) }}>Invite member</button>
@@ -1891,13 +1960,59 @@ function ChatApp({ token, login, onLogout }) {
 
       {memberDialog && (
         <Modal title={memberDialog === 'owner' ? 'Transfer ownership' : `${memberDialog[0].toUpperCase()}${memberDialog.slice(1)} member`} onClose={() => setMemberDialog(null)}>
-          <form className="modal-form" onSubmit={(event) => {
+          <form className="modal-form member-picker" onSubmit={(event) => {
             event.preventDefault()
             if (memberDialog === 'owner') transferOwnership(memberLogin)
             else groupMemberAction(memberDialog, memberLogin)
           }}>
-            <label>Username<input value={memberLogin} autoFocus onChange={(event) => setMemberLogin(event.target.value)} placeholder="@username" /></label>
-            <button className="primary-button" type="submit" disabled={!memberLogin.trim()}>Continue</button>
+            <div className="member-picker__intro">
+              <span>{['invite', 'add'].includes(memberDialog) ? 'TRUST DIRECTORY' : 'CURRENT MEMBERS'}</span>
+              <strong>
+                {['invite', 'add'].includes(memberDialog)
+                  ? 'People you already know'
+                  : 'Choose a group member'}
+              </strong>
+              <p>
+                {['invite', 'add'].includes(memberDialog)
+                  ? 'Only people from your existing private conversations are shown.'
+                  : 'The permanent account identity is used for this action.'}
+              </p>
+            </div>
+            <div className="member-picker__list" role="listbox" aria-label="Choose a person">
+              {memberCandidates.map((person) => {
+                const selected = memberLogin === person.login
+                return (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    className={`member-choice ${selected ? 'is-selected' : ''}`}
+                    key={person.login}
+                    onClick={() => setMemberLogin(person.login)}
+                  >
+                    <Avatar name={person.display_name || person.username} size={44} src={person.avatar_url} />
+                    <span>
+                      <strong>{person.display_name || person.username}</strong>
+                      <small>@{person.username}{person.id ? ` · ID #${person.id}` : ''}</small>
+                    </span>
+                    <i>{selected ? 'SELECTED' : 'SELECT'}</i>
+                  </button>
+                )
+              })}
+              {memberCandidates.length === 0 && (
+                <div className="member-picker__empty">
+                  <Icon name="shield" />
+                  <strong>No eligible people yet</strong>
+                  <span>Start a private conversation first, then return here.</span>
+                </div>
+              )}
+            </div>
+            <label className="member-picker__manual">Or enter the sign-in login
+              <input value={memberLogin} onChange={(event) => setMemberLogin(event.target.value)} placeholder="Exact login" />
+            </label>
+            <button className="primary-button" type="submit" disabled={!memberLogin.trim() || memberBusy}>
+              {memberBusy ? 'Updating…' : 'Continue'}
+            </button>
           </form>
         </Modal>
       )}
