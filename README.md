@@ -5,6 +5,12 @@ A FastAPI and React messenger backed by PostgreSQL and Redis.
 > E2EE is not implemented yet. The server currently stores message content in
 > plaintext. See [docs/README.md](docs/README.md) for the security specification.
 
+Sticker packs and typed messages are available in the current pre-alpha build.
+Encrypted attachment storage and S3-compatible transport are implemented on the
+backend, but the browser attachment button intentionally remains disabled until
+the MLS client can place the random file key inside a real E2EE envelope. See
+[Stage 6 status](docs/stage-6-stickers-media.md).
+
 ## Start without Docker
 
 ### Windows
