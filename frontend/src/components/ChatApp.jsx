@@ -160,6 +160,7 @@ function ChatApp({ token, login, onLogout }) {
   const [stickerPickerOpen, setStickerPickerOpen] = useState(false)
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
   const [dragActive, setDragActive] = useState(false)
+  const [attachmentNotice, setAttachmentNotice] = useState(null)
   const [stickerManagerOpen, setStickerManagerOpen] = useState(false)
   const [stickerPacks, setStickerPacks] = useState([])
   const [discoverPacks, setDiscoverPacks] = useState([])
@@ -188,7 +189,6 @@ function ChatApp({ token, login, onLogout }) {
   const selectedChatIdRef = useRef(null)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
-  const attachmentInputRef = useRef(null)
   const prependingHistoryRef = useRef(false)
   const outboxRef = useRef(readOutbox(login))
   const reconnectTimerRef = useRef(null)
@@ -1211,9 +1211,7 @@ function ChatApp({ token, login, onLogout }) {
       setError('Attachments must be 50 MB or smaller.')
       return
     }
-    setError(
-      `"${file.name}" was not uploaded. File sending stays locked until client-side MLS encryption is available.`
-    )
+    setAttachmentNotice(file.name)
   }
 
   const handleDrop = (event) => {
@@ -1449,19 +1447,9 @@ function ChatApp({ token, login, onLogout }) {
             setEmojiPickerOpen((value) => !value)
             setStickerPickerOpen(false)
           }}
-          onAttach={() => attachmentInputRef.current?.click()}
+          onAttach={() => setAttachmentNotice('')}
           conversation={selectedConversation}
           disabled={selectedChatId === null}
-        />
-        <input
-          ref={attachmentInputRef}
-          className="visually-hidden"
-          type="file"
-          onChange={(event) => {
-            chooseAttachment(event.target.files)
-            event.target.value = ''
-          }}
-          tabIndex={-1}
         />
         {emojiPickerOpen && (
           <div className="emoji-picker" role="dialog" aria-label="Emoji picker">
@@ -1506,9 +1494,27 @@ function ChatApp({ token, login, onLogout }) {
       {dragActive && (
         <div className="drop-overlay" aria-hidden="true">
           <span><Icon name="attach" size={28} /></span>
-          <strong>Drop an encrypted attachment</strong>
-          <small>Up to 50 MB · client encryption required</small>
+          <strong>Check attachment availability</strong>
+          <small>Files stay on your device until encryption is ready</small>
         </div>
+      )}
+
+      {attachmentNotice !== null && (
+        <Modal title="Encrypted attachments are not ready" onClose={() => setAttachmentNotice(null)}>
+          <div className="attachment-notice">
+            <span className="attachment-notice__icon"><Icon name="shield" size={28} /></span>
+            {attachmentNotice && <strong className="attachment-notice__file">{attachmentNotice}</strong>}
+            <p>
+              This file was not uploaded. Secure Messenger still needs the client-side
+              OpenMLS layer that encrypts the file key for every recipient device.
+            </p>
+            <p>
+              Sending it now would either expose the key to the server or make the file
+              impossible for recipients to open.
+            </p>
+            <button className="primary-button" type="button" onClick={() => setAttachmentNotice(null)}>Got it</button>
+          </div>
+        </Modal>
       )}
 
       {groupDialogOpen && (
