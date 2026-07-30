@@ -140,10 +140,16 @@ class StageSixMediaTests(unittest.TestCase):
             headers=self.headers(viewer_token),
         ).json()
         self.assertEqual([item["id"] for item in library], [pack["id"]])
+        visible_image = self.client.get(
+            sticker["image_url"],
+            headers=self.headers(viewer_token),
+        )
+        self.assertEqual(visible_image.status_code, 200, visible_image.text)
 
     def test_encrypted_attachment_is_stored_and_shared_as_ciphertext(self) -> None:
         alice = self.register_and_login("alice")
         bob = self.register_and_login("bob")
+        charlie = self.register_and_login("charlie")
         chat = self.client.post(
             "/api/v1/chats/dm",
             headers=self.headers(alice),
@@ -202,6 +208,11 @@ class StageSixMediaTests(unittest.TestCase):
         )
         self.assertEqual(download.status_code, 200, download.text)
         self.assertEqual(download.content, ciphertext)
+        forbidden = self.client.get(
+            attachment["content_url"],
+            headers=self.headers(charlie),
+        )
+        self.assertEqual(forbidden.status_code, 404)
         stored_files = list(self.media_dir.rglob("*.bin"))
         self.assertEqual(len(stored_files), 1)
         self.assertEqual(stored_files[0].read_bytes(), ciphertext)
