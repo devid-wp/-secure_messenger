@@ -152,7 +152,7 @@ async def create_direct_chat(
             .where(Chat.direct_key == direct_key)
             .options(*_chat_load_options())
         )
-    return serialize_chat(chat)
+    return await serialize_chat_summary(chat, current_user.id, session)
 
 
 @router.get("/groups", response_model=list[ChatResponse])

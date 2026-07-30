@@ -100,6 +100,52 @@ class DirectMessagesApiTests(unittest.TestCase):
         self.assertEqual([chat["id"] for chat in alice_chats.json()], [first.json()["id"]])
         self.assertEqual(charlie_chats.json(), [])
 
+    def test_direct_chat_exposes_the_other_users_persistent_avatar(self) -> None:
+        alice_token = self.register_and_login("alice")
+        bob_token = self.register_and_login("bob")
+        alice_avatar = self.client.post(
+            "/api/v1/users/me/avatar",
+            headers=self.headers(alice_token),
+            files={
+                "avatar": (
+                    "alice.png",
+                    b"\x89PNG\r\n\x1a\nalice-avatar",
+                    "image/png",
+                )
+            },
+        ).json()["avatar_url"]
+        bob_avatar = self.client.post(
+            "/api/v1/users/me/avatar",
+            headers=self.headers(bob_token),
+            files={
+                "avatar": (
+                    "bob.png",
+                    b"\x89PNG\r\n\x1a\nbob-avatar",
+                    "image/png",
+                )
+            },
+        ).json()["avatar_url"]
+
+        created_for_alice = self.client.post(
+            "/api/v1/chats/dm",
+            json={"login": "bob"},
+            headers=self.headers(alice_token),
+        )
+        self.assertEqual(created_for_alice.status_code, 200, created_for_alice.text)
+        self.assertEqual(created_for_alice.json()["avatar_url"], bob_avatar)
+
+        alice_list = self.client.get(
+            "/api/v1/chats/dm",
+            headers=self.headers(alice_token),
+        ).json()
+        bob_list = self.client.get(
+            "/api/v1/chats/dm",
+            headers=self.headers(bob_token),
+        ).json()
+        self.assertEqual(alice_list[0]["avatar_url"], bob_avatar)
+        self.assertEqual(bob_list[0]["avatar_url"], alice_avatar)
+        self.assertEqual(self.client.get(bob_avatar).status_code, 200)
+
     def test_message_history_uses_chat_bound_cursor_pagination(self) -> None:
         alice_token = self.register_and_login("alice")
         self.register_and_login("bob")

@@ -54,6 +54,16 @@ async def serialize_chat_summary(
         )
     )
     result = serialize_chat(chat)
+    if chat.type == "dm":
+        peer = next(
+            (
+                member.user
+                for member in chat.members
+                if member.user_id != viewer_user_id
+            ),
+            None,
+        )
+        result["avatar_url"] = peer.avatar_url if peer is not None else None
     result["unread_count"] = unread_count or 0
     result["last_message"] = (
         {
