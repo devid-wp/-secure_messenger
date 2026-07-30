@@ -81,6 +81,15 @@ class ChatResponse(BaseModel):
     member_roles: dict[str, str]
     avatar_url: str | None
     history_visibility: str
+    last_message: "ChatLastMessage | None" = None
+    unread_count: int = 0
+
+
+class ChatLastMessage(BaseModel):
+    sender: str
+    kind: str
+    content: str
+    timestamp: datetime
 
 
 class GroupCreateRequest(BaseModel):

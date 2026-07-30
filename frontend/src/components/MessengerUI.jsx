@@ -31,6 +31,7 @@ export function Icon({ name, size = 18 }) {
     send: <path d="m4 4 17 8-17 8 3-8-3-8Zm3 8h14" />,
     attach: <path d="m9 17 7.6-7.6a3.5 3.5 0 0 0-5-5L4.8 11.2a5 5 0 0 0 7 7l6.4-6.4" />,
     sticker: <><path d="M5 4h14a1 1 0 0 1 1 1v9l-6 6H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" /><path d="M14 20v-5a1 1 0 0 1 1-1h5M8 9h.01M16 9h.01M8.5 13c2 1.7 5 1.7 7 0" /></>,
+    emoji: <><circle cx="12" cy="12" r="9" /><path d="M8 14c1.8 2 6.2 2 8 0M9 9h.01M15 9h.01" /></>,
     reply: <path d="m10 8-5 4 5 4v-3h4c3 0 5 1 6 4 0-6-3-8-10-8V8Z" />,
     edit: <path d="m13.5 5.5 5 5M5 19l3.8-.8L19 7a2.1 2.1 0 0 0-3-3L4.8 14.2 4 18z" />,
     trash: <><path d="M5 7h14M9 7V4h6v3M8 10v8m4-8v8m4-8v8M7 7l1 14h8l1-14" /></>,
@@ -66,7 +67,7 @@ export function Avatar({ name, size = 40, src = null, online = false }) {
   )
 }
 
-export function SearchInput({ value, onChange }) {
+export function SearchInput({ value, onChange, loading = false }) {
   return (
     <div className="search-control">
       <Icon name="search" size={17} />
@@ -77,6 +78,7 @@ export function SearchInput({ value, onChange }) {
         placeholder="Search people"
         aria-label="Search users"
       />
+      {loading && <span className="search-spinner" aria-label="Searching" />}
       {value && (
         <button type="button" className="search-clear" onClick={() => onChange({ target: { value: '' } })} aria-label="Clear search">
           <Icon name="close" size={15} />
@@ -86,25 +88,58 @@ export function SearchInput({ value, onChange }) {
   )
 }
 
+function previewMessage(lastMessage) {
+  if (!lastMessage) return ''
+  if (lastMessage.kind === 'sticker') return 'Sticker'
+  if (lastMessage.kind === 'image') return 'Photo'
+  if (lastMessage.kind === 'file') return 'File'
+  return lastMessage.content
+}
+
+function previewTime(timestamp) {
+  if (!timestamp) return ''
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return ''
+  const today = new Date()
+  return date.toDateString() === today.toDateString()
+    ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
 export function ContactListItem({ conversation, active, onSelect }) {
   const subtitle = conversation.userLogin
     ? 'Start a private conversation'
-    : conversation.type === 'group'
-      ? memberCountLabel(conversation.memberCount)
-      : 'Private conversation'
+    : previewMessage(conversation.lastMessage)
+      || (conversation.type === 'group'
+        ? memberCountLabel(conversation.memberCount)
+        : 'Private conversation')
   return (
     <button
       type="button"
       className={`contact-item ${active ? 'active' : ''}`}
       onClick={onSelect}
+      onKeyDown={(event) => {
+        if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return
+        event.preventDefault()
+        const items = [...event.currentTarget.parentElement.querySelectorAll('.contact-item')]
+        const current = items.indexOf(event.currentTarget)
+        const offset = event.key === 'ArrowDown' ? 1 : -1
+        const target = items[(current + offset + items.length) % items.length]
+        if (target instanceof HTMLElement) target.focus()
+      }}
       aria-current={active ? 'page' : undefined}
     >
       <Avatar name={conversation.label} size={46} src={conversation.avatarUrl} />
       <span className="contact-copy">
-        <span className="contact-name">{conversation.label}</span>
+        <span className="contact-name-row">
+          <span className="contact-name">{conversation.label}</span>
+          <time>{previewTime(conversation.lastMessage?.timestamp)}</time>
+        </span>
         <span className="contact-preview">{subtitle}</span>
       </span>
-      <span className="contact-kind">{conversation.type === 'group' ? 'GROUP' : 'DM'}</span>
+      {conversation.unreadCount > 0
+        ? <span className="unread-badge" aria-label={`${conversation.unreadCount} unread messages`}>{Math.min(conversation.unreadCount, 99)}</span>
+        : <span className="contact-kind">{conversation.type === 'group' ? 'GROUP' : 'DM'}</span>}
     </button>
   )
 }
@@ -192,7 +227,7 @@ export function EmptyState({ conversation }) {
   )
 }
 
-export function MessageComposer({ inputRef, value, onChange, onSubmit, onSticker, conversation, disabled }) {
+export function MessageComposer({ inputRef, value, onChange, onSubmit, onSticker, onEmoji, onAttach, conversation, disabled }) {
   const handleChange = (event) => {
     event.target.style.height = 'auto'
     event.target.style.height = `${Math.min(event.target.scrollHeight, 120)}px`
@@ -206,8 +241,11 @@ export function MessageComposer({ inputRef, value, onChange, onSubmit, onSticker
   }
   return (
     <form className={`message-composer ${value.trim() ? 'has-content' : ''}`} onSubmit={onSubmit}>
-      <button type="button" className="icon-button composer-attach" disabled title="File attachments are coming soon" aria-label="File attachments are not available yet">
+      <button type="button" className="icon-button composer-attach" onClick={onAttach} title="Attach an encrypted file" aria-label="Attach file">
         <Icon name="attach" />
+      </button>
+      <button type="button" className="icon-button composer-emoji" disabled={disabled} onClick={onEmoji} title="Emoji" aria-label="Open emoji picker">
+        <Icon name="emoji" />
       </button>
       <button
         type="button"
@@ -246,7 +284,7 @@ export function MessageComposer({ inputRef, value, onChange, onSubmit, onSticker
 
 export function Modal({ title, children, onClose }) {
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose} onKeyDown={(event) => event.key === 'Escape' && onClose()}>
       <section className="modal-card" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
         <header className="modal-card__header">
           <h2>{title}</h2>
@@ -254,6 +292,27 @@ export function Modal({ title, children, onClose }) {
         </header>
         {children}
       </section>
+    </div>
+  )
+}
+
+export function ConversationSkeleton() {
+  return (
+    <div className="conversation-skeleton" aria-label="Loading conversations" aria-busy="true">
+      {[0, 1, 2, 3, 4].map((item) => (
+        <div className="skeleton-row" key={item}>
+          <span className="skeleton-avatar" />
+          <span className="skeleton-copy"><i /><i /></span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function MessagesSkeleton() {
+  return (
+    <div className="messages-skeleton" aria-label="Loading messages" aria-busy="true">
+      <span /><span /><span /><span />
     </div>
   )
 }

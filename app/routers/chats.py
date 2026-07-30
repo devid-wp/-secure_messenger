@@ -19,7 +19,7 @@ from app.schemas import (
     GroupOwnerTransferRequest,
     GroupUpdateRequest,
 )
-from app.services.serializers import serialize_chat
+from app.services.serializers import serialize_chat, serialize_chat_summary
 from app.services.system_messages import append_system_message
 from app.services.uploads import save_image, validate_avatar_url
 
@@ -61,7 +61,10 @@ async def list_chats(
             .order_by(Chat.created_at.desc(), Chat.id.desc())
         )
     ).all()
-    return [serialize_chat(chat) for chat in chats]
+    return [
+        await serialize_chat_summary(chat, current_user.id, session)
+        for chat in chats
+    ]
 
 
 @router.get("/dm", response_model=list[ChatResponse])
@@ -81,7 +84,10 @@ async def list_direct_chats(
             .order_by(Chat.created_at.desc(), Chat.id.desc())
         )
     ).all()
-    return [serialize_chat(chat) for chat in chats]
+    return [
+        await serialize_chat_summary(chat, current_user.id, session)
+        for chat in chats
+    ]
 
 
 @router.post("/dm", response_model=ChatResponse)
@@ -166,7 +172,10 @@ async def list_groups(
             .order_by(Chat.created_at.desc(), Chat.id.desc())
         )
     ).all()
-    return [serialize_chat(group) for group in groups]
+    return [
+        await serialize_chat_summary(group, current_user.id, session)
+        for group in groups
+    ]
 
 
 @router.post("/groups", response_model=ChatResponse, status_code=201)

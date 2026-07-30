@@ -3,12 +3,14 @@ import { useTheme } from '../ThemeContext'
 import {
   Avatar,
   ChatHeader,
+  ConversationSkeleton,
   ContactListItem,
   EmptyState,
   Icon,
   MessageActions,
   MessageComposer,
   MessageStatus,
+  MessagesSkeleton,
   Modal,
   SearchInput,
 } from './MessengerUI'
@@ -20,6 +22,7 @@ const WS_URL = API_URL
   : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
 const MAX_AVATAR_BYTES = 50 * 1024 * 1024
 const AVATAR_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const QUICK_EMOJI = ['😀', '😂', '❤️', '👍', '🔥', '🎉', '😎', '🤝', '👀', '✅', '🔒', '✨', '🙏', '💜', '🚀', '🫡']
 
 function readOutbox(login) {
   try {
@@ -134,10 +137,13 @@ function ChatApp({ token, login, onLogout }) {
   const [chats, setChats] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
+  const [workspaceLoading, setWorkspaceLoading] = useState(true)
+  const [searchLoading, setSearchLoading] = useState(false)
   const [selectedChatId, setSelectedChatId] = useState(null)
   const [messages, setMessages] = useState([])
   const [nextCursor, setNextCursor] = useState(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const [messagesLoading, setMessagesLoading] = useState(false)
   const [replyingTo, setReplyingTo] = useState(null)
   const [invitations, setInvitations] = useState([])
   const [inputText, setInputText] = useState('')
@@ -151,6 +157,8 @@ function ChatApp({ token, login, onLogout }) {
   const [profileFormError, setProfileFormError] = useState('')
   const [profileSaving, setProfileSaving] = useState(false)
   const [stickerPickerOpen, setStickerPickerOpen] = useState(false)
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
   const [stickerManagerOpen, setStickerManagerOpen] = useState(false)
   const [stickerPacks, setStickerPacks] = useState([])
   const [discoverPacks, setDiscoverPacks] = useState([])
@@ -179,6 +187,7 @@ function ChatApp({ token, login, onLogout }) {
   const selectedChatIdRef = useRef(null)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
+  const attachmentInputRef = useRef(null)
   const prependingHistoryRef = useRef(false)
   const outboxRef = useRef(readOutbox(login))
   const reconnectTimerRef = useRef(null)
@@ -200,6 +209,18 @@ function ChatApp({ token, login, onLogout }) {
     }
   }, [])
 
+  useEffect(() => {
+    const closeFloatingPanels = (event) => {
+      if (event.key !== 'Escape') return
+      setMainMenuOpen(false)
+      setChatMenuOpen(false)
+      setStickerPickerOpen(false)
+      setEmojiPickerOpen(false)
+    }
+    window.addEventListener('keydown', closeFloatingPanels)
+    return () => window.removeEventListener('keydown', closeFloatingPanels)
+  }, [])
+
   const conversations = useMemo(() => {
     const existingDmUsers = new Set()
     const existingChats = chats.map((chat) => {
@@ -217,6 +238,8 @@ function ChatApp({ token, login, onLogout }) {
         memberRoles: chat.member_roles,
         historyVisibility: chat.history_visibility,
         memberCount: chat.members.length,
+        lastMessage: chat.last_message,
+        unreadCount: chat.unread_count || 0,
       }
     })
     const newDirectChats = searchResults
@@ -231,8 +254,15 @@ function ChatApp({ token, login, onLogout }) {
         memberRoles: null,
         historyVisibility: null,
         memberCount: 2,
+        lastMessage: null,
+        unreadCount: 0,
       }))
-    return [...existingChats, ...newDirectChats]
+    return [...existingChats, ...newDirectChats].sort((left, right) => {
+      if (left.userLogin || right.userLogin) return left.userLogin ? -1 : 1
+      const leftTime = left.lastMessage?.timestamp || ''
+      const rightTime = right.lastMessage?.timestamp || ''
+      return rightTime.localeCompare(leftTime)
+    })
   }, [chats, login, searchResults])
 
   const selectedConversation = conversations.find(
@@ -289,6 +319,8 @@ function ChatApp({ token, login, onLogout }) {
         })
       } catch (loadError) {
         if (!cancelled) setError(loadError.message)
+      } finally {
+        if (!cancelled) setWorkspaceLoading(false)
       }
     }
 
@@ -304,6 +336,7 @@ function ChatApp({ token, login, onLogout }) {
       return undefined
     }
     const controller = new AbortController()
+    setSearchLoading(true)
     const timer = window.setTimeout(async () => {
       try {
         const response = await fetch(
@@ -318,6 +351,8 @@ function ChatApp({ token, login, onLogout }) {
         setSearchResults(await response.json())
       } catch (searchError) {
         if (searchError.name !== 'AbortError') setError(searchError.message)
+      } finally {
+        setSearchLoading(false)
       }
     }, 250)
     return () => {
@@ -333,6 +368,7 @@ function ChatApp({ token, login, onLogout }) {
 
     let cancelled = false
     const loadMessages = async () => {
+      setMessagesLoading(true)
       try {
         const response = await fetch(
           `${API_URL}/api/v1/chats/${selectedChatId}/messages`,
@@ -350,10 +386,15 @@ function ChatApp({ token, login, onLogout }) {
           )
           setMessages([...data.items, ...pending])
           setNextCursor(data.next_cursor)
+          setChats((previous) => previous.map((chat) => (
+            chat.id === selectedChatId ? { ...chat, unread_count: 0 } : chat
+          )))
           setError('')
         }
       } catch (loadError) {
         if (!cancelled) setError(loadError.message)
+      } finally {
+        if (!cancelled) setMessagesLoading(false)
       }
     }
 
@@ -451,6 +492,19 @@ function ChatApp({ token, login, onLogout }) {
             )
             writeOutbox(login, outboxRef.current)
             updateMessageStatus(data.client_id, 'sent', data)
+            setChats((previous) => previous.map((chat) => (
+              chat.id === data.chat_id
+                ? {
+                    ...chat,
+                    last_message: {
+                      sender: login,
+                      kind: data.kind || 'text',
+                      content: data.content || '',
+                      timestamp: data.timestamp,
+                    },
+                  }
+                : chat
+            )))
             return
           }
           if (data.type === 'message_status') {
@@ -493,6 +547,22 @@ function ChatApp({ token, login, onLogout }) {
                   : [...previous, data]
               ))
             }
+            setChats((previous) => previous.map((chat) => (
+              chat.id === data.chat_id
+                ? {
+                    ...chat,
+                    last_message: {
+                      sender: data.sender,
+                      kind: data.kind,
+                      content: data.content,
+                      timestamp: data.timestamp,
+                    },
+                    unread_count: data.chat_id === selectedChatIdRef.current
+                      ? 0
+                      : (chat.unread_count || 0) + 1,
+                  }
+                : chat
+            )))
             setError('')
           }
         } catch {
@@ -534,6 +604,9 @@ function ChatApp({ token, login, onLogout }) {
     setError('')
     if (conversation.chatId !== null) {
       setSelectedChatId(conversation.chatId)
+      setChats((previous) => previous.map((chat) => (
+        chat.id === conversation.chatId ? { ...chat, unread_count: 0 } : chat
+      )))
       return
     }
 
@@ -1118,8 +1191,48 @@ function ChatApp({ token, login, onLogout }) {
     setChatMenuOpen(false)
   }
 
+  const chooseAttachment = (files) => {
+    const file = files?.[0]
+    setDragActive(false)
+    if (!file) return
+    if (file.size > 50 * 1024 * 1024) {
+      setError('Attachments must be 50 MB or smaller.')
+      return
+    }
+    setError(
+      `"${file.name}" was not uploaded. File sending stays locked until client-side MLS encryption is available.`
+    )
+  }
+
+  const handleDrop = (event) => {
+    event.preventDefault()
+    chooseAttachment(event.dataTransfer.files)
+  }
+
+  const insertEmoji = (emoji) => {
+    const textarea = inputRef.current
+    const start = textarea?.selectionStart ?? inputText.length
+    const end = textarea?.selectionEnd ?? inputText.length
+    setInputText(`${inputText.slice(0, start)}${emoji}${inputText.slice(end)}`)
+    setEmojiPickerOpen(false)
+    window.requestAnimationFrame(() => {
+      textarea?.focus()
+      textarea?.setSelectionRange(start + emoji.length, start + emoji.length)
+    })
+  }
+
   return (
-    <div className={`chat-container ${selectedChatId !== null ? 'mobile-chat-open' : ''}`}>
+    <div
+      className={`chat-container ${selectedChatId !== null ? 'mobile-chat-open' : ''} ${dragActive ? 'is-dragging' : ''}`}
+      onDragEnter={(event) => { event.preventDefault(); setDragActive(true) }}
+      onDragOver={(event) => event.preventDefault()}
+      onDragLeave={(event) => {
+        if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
+          setDragActive(false)
+        }
+      }}
+      onDrop={handleDrop}
+    >
       <aside className="channel-panel" aria-label="Conversations">
         <header className="channel-header">
           <button className="brand-menu icon-button" type="button" onClick={() => setMainMenuOpen((value) => !value)} aria-label="Main menu"><Icon name="menu" /></button>
@@ -1139,9 +1252,17 @@ function ChatApp({ token, login, onLogout }) {
           )}
         </header>
 
-        <div className="user-search"><SearchInput value={searchQuery} onChange={handleSearchChange} /></div>
+        <div className="user-search"><SearchInput value={searchQuery} onChange={handleSearchChange} loading={searchLoading} /></div>
         <nav className="channel-list">
-          {conversations.map((conversation) => (
+          {workspaceLoading && <ConversationSkeleton />}
+          {!workspaceLoading && conversations.length === 0 && (
+            <div className="sidebar-empty">
+              <Icon name="search" />
+              <strong>No conversations</strong>
+              <span>Search for someone to start a private chat.</span>
+            </div>
+          )}
+          {!workspaceLoading && conversations.map((conversation) => (
             <ContactListItem
               key={conversation.key}
               conversation={conversation}
@@ -1209,7 +1330,7 @@ function ChatApp({ token, login, onLogout }) {
 
         <div className="messages-list" key={selectedChatId ?? 'empty'}>
           {!wsReady && <div className="offline-banner">Connection interrupted. Queued messages will retry automatically.</div>}
-          {error && <p className="error-message">{error}</p>}
+          {error && <p className="error-message" role="alert">{error}<button type="button" onClick={() => setError('')} aria-label="Dismiss error">×</button></p>}
           {nextCursor && (
             <button
               type="button"
@@ -1220,8 +1341,9 @@ function ChatApp({ token, login, onLogout }) {
               {loadingOlder ? 'Loading…' : 'Load earlier messages'}
             </button>
           )}
-          {messages.length === 0 && <EmptyState conversation={selectedConversation} />}
-          {messages.map((message, index) => {
+          {messagesLoading && <MessagesSkeleton />}
+          {!messagesLoading && messages.length === 0 && <EmptyState conversation={selectedConversation} />}
+          {!messagesLoading && messages.map((message, index) => {
             const own = message.sender === login
             const previous = messages[index - 1]
             const grouped = previous?.sender === message.sender
@@ -1306,9 +1428,34 @@ function ChatApp({ token, login, onLogout }) {
           onChange={(event) => setInputText(event.target.value)}
           onSubmit={sendMessage}
           onSticker={openStickerPicker}
+          onEmoji={() => {
+            setEmojiPickerOpen((value) => !value)
+            setStickerPickerOpen(false)
+          }}
+          onAttach={() => attachmentInputRef.current?.click()}
           conversation={selectedConversation}
           disabled={selectedChatId === null}
         />
+        <input
+          ref={attachmentInputRef}
+          className="visually-hidden"
+          type="file"
+          onChange={(event) => {
+            chooseAttachment(event.target.files)
+            event.target.value = ''
+          }}
+          tabIndex={-1}
+        />
+        {emojiPickerOpen && (
+          <div className="emoji-picker" role="dialog" aria-label="Emoji picker">
+            <header><strong>Emoji</strong><span>Quick reactions</span></header>
+            <div className="emoji-grid">
+              {QUICK_EMOJI.map((emoji) => (
+                <button type="button" key={emoji} onClick={() => insertEmoji(emoji)} aria-label={`Insert ${emoji}`}>{emoji}</button>
+              ))}
+            </div>
+          </div>
+        )}
         {stickerPickerOpen && (
           <div className="sticker-picker">
             <header>
@@ -1338,6 +1485,14 @@ function ChatApp({ token, login, onLogout }) {
           </div>
         )}
       </main>
+
+      {dragActive && (
+        <div className="drop-overlay" aria-hidden="true">
+          <span><Icon name="attach" size={28} /></span>
+          <strong>Drop an encrypted attachment</strong>
+          <small>Up to 50 MB · client encryption required</small>
+        </div>
+      )}
 
       {groupDialogOpen && (
         <Modal title="New group" onClose={() => setGroupDialogOpen(false)}>

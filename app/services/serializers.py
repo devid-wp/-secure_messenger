@@ -1,4 +1,8 @@
-from app.models import Chat, Message
+from sqlalchemy import and_, exists, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.models import Chat, ChatMember, Message, MessageReceipt
 
 
 def serialize_chat(chat: Chat) -> dict:
@@ -15,6 +19,53 @@ def serialize_chat(chat: Chat) -> dict:
         "avatar_url": chat.avatar_url,
         "history_visibility": chat.history_visibility,
     }
+
+
+async def serialize_chat_summary(
+    chat: Chat,
+    viewer_user_id: int,
+    session: AsyncSession,
+) -> dict:
+    """Serialize sidebar data without exposing message bodies outside membership."""
+    membership = await session.get(ChatMember, (chat.id, viewer_user_id))
+    history_from_seq = membership.history_from_seq if membership else 1
+    latest = await session.scalar(
+        select(Message)
+        .where(
+            Message.chat_id == chat.id,
+            Message.server_seq >= history_from_seq,
+        )
+        .options(selectinload(Message.sender))
+        .order_by(Message.server_seq.desc())
+        .limit(1)
+    )
+    unread_count = await session.scalar(
+        select(func.count(Message.id)).where(
+            Message.chat_id == chat.id,
+            Message.server_seq >= history_from_seq,
+            Message.sender_user_id != viewer_user_id,
+            ~exists().where(
+                and_(
+                    MessageReceipt.message_id == Message.id,
+                    MessageReceipt.user_id == viewer_user_id,
+                    MessageReceipt.status == "read",
+                )
+            ),
+        )
+    )
+    result = serialize_chat(chat)
+    result["unread_count"] = unread_count or 0
+    result["last_message"] = (
+        {
+            "sender": latest.sender.login,
+            "kind": latest.kind,
+            "content": latest.content,
+            "timestamp": latest.timestamp,
+        }
+        if latest is not None
+        else None
+    )
+    return result
 
 
 def serialize_message(message: Message, viewer_user_id: int | None = None) -> dict:
