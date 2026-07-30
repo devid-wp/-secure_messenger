@@ -39,6 +39,8 @@ async def append_system_message(
             selectinload(Message.sender),
             selectinload(Message.receipts),
             selectinload(Message.reply_to).selectinload(Message.sender),
+            selectinload(Message.attachment),
+            selectinload(Message.sticker),
         )
     )
     member_ids = set(

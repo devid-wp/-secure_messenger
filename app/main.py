@@ -8,10 +8,11 @@ from redis.asyncio import Redis
 
 from .core.config import Settings
 from .db import create_database_engine, create_session_factory
-from .routers import auth, chats, e2ee, messages, realtime, users
+from .routers import auth, chats, e2ee, media, messages, realtime, users
 from .services.realtime import ConnectionManager
 from .services.rate_limit import RateLimiter
 from .services.session_store import InMemorySessionStore, RedisSessionStore
+from .services.object_storage import create_object_storage
 
 
 API_V1_PREFIX = "/api/v1"
@@ -32,6 +33,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else InMemorySessionStore(app_settings.session_ttl_seconds)
     )
     connection_manager = ConnectionManager(redis)
+    object_storage = create_object_storage(app_settings)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -53,6 +55,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.session_factory = session_factory
     application.state.session_store = session_store
     application.state.connection_manager = connection_manager
+    application.state.object_storage = object_storage
     application.state.rate_limiter = RateLimiter(
         app_settings.rate_limit_requests,
         app_settings.rate_limit_window_seconds,
@@ -77,6 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api_v1.include_router(users.router)
     api_v1.include_router(chats.router)
     api_v1.include_router(e2ee.router)
+    api_v1.include_router(media.router)
     api_v1.include_router(messages.router)
     api_v1.include_router(realtime.router)
     application.include_router(api_v1)

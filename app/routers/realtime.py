@@ -11,8 +11,11 @@ from sqlalchemy.orm import selectinload
 from app.models import (
     Chat,
     ChatMember,
+    MediaObject,
     Message,
     MessageReceipt,
+    Sticker,
+    StickerPackSubscription,
     User,
     UserBlock,
 )
@@ -21,6 +24,16 @@ from app.services.serializers import serialize_message
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/realtime", tags=["realtime"])
+
+
+def _message_options():
+    return (
+        selectinload(Message.sender),
+        selectinload(Message.receipts),
+        selectinload(Message.reply_to).selectinload(Message.sender),
+        selectinload(Message.attachment),
+        selectinload(Message.sticker).selectinload(Sticker.media),
+    )
 
 
 @router.websocket("/ws")
@@ -112,12 +125,40 @@ async def websocket_endpoint(websocket: WebSocket):
                 if event_type != "send_message":
                     raise ValueError
                 chat_id = payload["chat_id"]
-                text = payload["text"]
+                message_kind = payload.get("kind", "text")
+                content = payload.get("content", payload.get("text", ""))
+                attachment_id = payload.get("attachment_id")
+                sticker_id = payload.get("sticker_id")
+                key_envelope = payload.get("key_envelope")
                 raw_client_id = payload.get("client_id") or str(uuid4())
                 reply_to_server_seq = payload.get("reply_to_server_seq")
                 if isinstance(chat_id, bool) or not isinstance(chat_id, int):
                     raise ValueError
-                if not isinstance(text, str) or not text.strip():
+                if message_kind not in {"text", "sticker", "image", "file"}:
+                    raise ValueError
+                if not isinstance(content, str):
+                    raise ValueError
+                content = content.strip()
+                if message_kind == "text" and not (1 <= len(content) <= 16384):
+                    raise ValueError
+                if message_kind == "sticker":
+                    if content or not isinstance(sticker_id, str):
+                        raise ValueError
+                    sticker_id = str(UUID(sticker_id))
+                    if attachment_id is not None or key_envelope is not None:
+                        raise ValueError
+                elif message_kind in {"image", "file"}:
+                    if len(content) > 4096 or not isinstance(attachment_id, str):
+                        raise ValueError
+                    attachment_id = str(UUID(attachment_id))
+                    if (
+                        not isinstance(key_envelope, str)
+                        or not (1 <= len(key_envelope) <= 65536)
+                    ):
+                        raise ValueError
+                    if sticker_id is not None:
+                        raise ValueError
+                elif attachment_id is not None or sticker_id is not None:
                     raise ValueError
                 client_id = str(UUID(raw_client_id))
                 if (
@@ -178,11 +219,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         Message.sender_user_id == user_id,
                         Message.client_id == client_id,
                     )
-                    .options(
-                        selectinload(Message.sender),
-                        selectinload(Message.receipts),
-                        selectinload(Message.reply_to).selectinload(Message.sender),
-                    )
+                    .options(*_message_options())
                 )
                 reply_to = None
                 if reply_to_server_seq is not None:
@@ -197,9 +234,64 @@ async def websocket_endpoint(websocket: WebSocket):
                             {"type": "error", "detail": "Reply target not found"}
                         )
                         continue
+                sticker = None
+                attachment = None
+                if message_kind == "sticker":
+                    sticker = await session.scalar(
+                        select(Sticker)
+                        .where(Sticker.id == sticker_id)
+                        .options(
+                            selectinload(Sticker.pack),
+                            selectinload(Sticker.media),
+                        )
+                    )
+                    if sticker is None:
+                        await websocket.send_json(
+                            {"type": "error", "detail": "Sticker not found"}
+                        )
+                        continue
+                    subscribed = await session.get(
+                        StickerPackSubscription,
+                        (sticker.pack_id, user_id),
+                    )
+                    if (
+                        sticker.pack.visibility != "public"
+                        and sticker.pack.owner_user_id != user_id
+                        and subscribed is None
+                    ):
+                        await websocket.send_json(
+                            {"type": "error", "detail": "Sticker not found"}
+                        )
+                        continue
+                elif message_kind in {"image", "file"}:
+                    attachment = await session.get(MediaObject, attachment_id)
+                    already_attached = await session.scalar(
+                        select(Message.id).where(
+                            Message.attachment_id == attachment_id,
+                            Message.client_id != client_id,
+                        )
+                    )
+                    if (
+                        attachment is None
+                        or attachment.owner_user_id != user_id
+                        or attachment.purpose != "attachment"
+                        or not attachment.is_encrypted
+                        or already_attached is not None
+                    ):
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "detail": "Encrypted attachment is unavailable",
+                            }
+                        )
+                        continue
                 if message is not None and (
                     message.chat_id != chat_id
-                    or message.content != text.strip()
+                    or message.content != content
+                    or message.kind != message_kind
+                    or message.attachment_id != attachment_id
+                    or message.sticker_id != sticker_id
+                    or message.key_envelope != key_envelope
                     or message.reply_to_id != (
                         reply_to.id if reply_to is not None else None
                     )
@@ -225,7 +317,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     message = Message(
                         chat_id=chat_id,
                         sender_user_id=user_id,
-                        content=text.strip(),
+                        content=content,
+                        kind=message_kind,
+                        attachment_id=attachment_id,
+                        sticker_id=sticker_id,
+                        key_envelope=key_envelope,
                         client_id=client_id,
                         server_seq=server_seq,
                         reply_to_id=reply_to.id if reply_to else None,
@@ -242,17 +338,15 @@ async def websocket_endpoint(websocket: WebSocket):
                             Message.sender_user_id == user_id,
                             Message.client_id == client_id,
                         )
-                        .options(
-                            selectinload(Message.sender),
-                            selectinload(Message.receipts),
-                            selectinload(Message.reply_to).selectinload(
-                                Message.sender
-                            ),
-                        )
+                        .options(*_message_options())
                     )
                     if message is None or (
                         message.chat_id != chat_id
-                        or message.content != text.strip()
+                        or message.content != content
+                        or message.kind != message_kind
+                        or message.attachment_id != attachment_id
+                        or message.sticker_id != sticker_id
+                        or message.key_envelope != key_envelope
                         or message.reply_to_id != (
                             reply_to.id if reply_to is not None else None
                         )

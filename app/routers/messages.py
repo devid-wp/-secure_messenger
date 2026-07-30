@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_current_user, get_db
-from app.models import Chat, ChatMember, Message, User
+from app.models import Chat, ChatMember, Message, Sticker, User
 from app.schemas import MessageEditRequest, MessagePage, MessageResponse
 from app.services.cursors import (
     InvalidCursor,
@@ -24,6 +24,8 @@ def _message_options():
         selectinload(Message.sender),
         selectinload(Message.receipts),
         selectinload(Message.reply_to).selectinload(Message.sender),
+        selectinload(Message.attachment),
+        selectinload(Message.sticker).selectinload(Sticker.media),
     )
 
 
@@ -106,8 +108,8 @@ async def edit_message(
         raise HTTPException(status_code=404, detail="Message not found")
     if message.sender_user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Only the sender can edit")
-    if message.kind == "system":
-        raise HTTPException(status_code=403, detail="System messages cannot be edited")
+    if message.kind != "text":
+        raise HTTPException(status_code=403, detail="Only text messages can be edited")
     if message.deleted_at is not None:
         raise HTTPException(status_code=409, detail="Message is deleted")
     message.content = request_body.content.strip()

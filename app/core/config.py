@@ -8,6 +8,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SQLITE_PATH = PROJECT_ROOT / "secure_messenger.db"
 DEFAULT_UPLOAD_DIR = PROJECT_ROOT / "uploads"
+DEFAULT_MEDIA_DIR = PROJECT_ROOT / "media"
 
 
 def _default_database_url() -> str:
@@ -28,6 +29,13 @@ class Settings:
     rate_limit_requests: int = 120
     rate_limit_window_seconds: int = 60
     upload_dir: Path = DEFAULT_UPLOAD_DIR
+    media_storage_backend: str = "local"
+    media_dir: Path = DEFAULT_MEDIA_DIR
+    s3_endpoint_url: str | None = None
+    s3_region: str = "us-east-1"
+    s3_bucket: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -56,6 +64,17 @@ class Settings:
             upload_dir=Path(
                 os.environ.get("UPLOAD_DIR", str(DEFAULT_UPLOAD_DIR))
             ).resolve(),
+            media_storage_backend=os.environ.get(
+                "MEDIA_STORAGE_BACKEND", "local"
+            ).strip().lower(),
+            media_dir=Path(
+                os.environ.get("MEDIA_DIR", str(DEFAULT_MEDIA_DIR))
+            ).resolve(),
+            s3_endpoint_url=os.environ.get("S3_ENDPOINT_URL") or None,
+            s3_region=os.environ.get("S3_REGION", "us-east-1"),
+            s3_bucket=os.environ.get("S3_BUCKET") or None,
+            s3_access_key_id=os.environ.get("S3_ACCESS_KEY_ID") or None,
+            s3_secret_access_key=os.environ.get("S3_SECRET_ACCESS_KEY") or None,
         )
         settings.validate()
         return settings
@@ -71,6 +90,19 @@ class Settings:
             raise RuntimeError("APP_ENV=production requires REDIS_URL")
         if self.session_ttl_seconds < 300:
             raise RuntimeError("SESSION_TTL_SECONDS must be at least 300")
+        if self.media_storage_backend not in {"local", "s3"}:
+            raise RuntimeError("MEDIA_STORAGE_BACKEND must be local or s3")
+        if self.media_storage_backend == "s3" and not all(
+            (
+                self.s3_endpoint_url,
+                self.s3_bucket,
+                self.s3_access_key_id,
+                self.s3_secret_access_key,
+            )
+        ):
+            raise RuntimeError(
+                "S3 media storage requires endpoint, bucket, access key, and secret"
+            )
 
     @property
     def sync_database_url(self) -> str:

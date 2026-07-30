@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import Base64Bytes, BaseModel, ConfigDict, Field
 
@@ -140,6 +141,9 @@ class MessageResponse(BaseModel):
     timestamp: datetime
     edited_at: datetime | None
     deleted_at: datetime | None
+    attachment: "MediaObjectResponse | None" = None
+    sticker: "StickerResponse | None" = None
+    key_envelope: str | None = None
 
 
 class MessagePage(BaseModel):
@@ -150,3 +154,53 @@ class MessagePage(BaseModel):
 
 class MessageEditRequest(BaseModel):
     content: str = Field(min_length=1, max_length=16384)
+
+
+class MediaObjectResponse(BaseModel):
+    id: str
+    purpose: Literal["attachment", "sticker"]
+    content_type: str
+    size_bytes: int
+    sha256: str
+    is_encrypted: bool
+    cipher: str | None
+    nonce: str | None
+    width: int | None
+    height: int | None
+    content_url: str
+
+
+class StickerResponse(BaseModel):
+    id: str
+    emoji: str | None
+    position: int
+    image_url: str
+    width: int
+    height: int
+
+
+class StickerPackCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=64)
+    slug: str = Field(
+        min_length=2,
+        max_length=64,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    visibility: Literal["public", "private"] = "private"
+
+
+class StickerPackUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=64)
+    visibility: Literal["public", "private"] | None = None
+
+
+class StickerPackResponse(BaseModel):
+    id: str
+    title: str
+    slug: str
+    visibility: Literal["public", "private"]
+    owner: str
+    subscribed: bool
+    editable: bool
+    stickers: list[StickerResponse]
+    created_at: datetime

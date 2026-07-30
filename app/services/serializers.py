@@ -25,6 +25,31 @@ def serialize_message(message: Message, viewer_user_id: int | None = None) -> di
             status = "read"
         elif "delivered" in receipt_states:
             status = "delivered"
+    attachment = None
+    if message.attachment is not None:
+        attachment = {
+            "id": message.attachment.id,
+            "purpose": message.attachment.purpose,
+            "content_type": message.attachment.content_type,
+            "size_bytes": message.attachment.size_bytes,
+            "sha256": message.attachment.sha256,
+            "is_encrypted": message.attachment.is_encrypted,
+            "cipher": message.attachment.cipher,
+            "nonce": message.attachment.nonce,
+            "width": message.attachment.width,
+            "height": message.attachment.height,
+            "content_url": f"/api/v1/media/{message.attachment.id}/content",
+        }
+    sticker = None
+    if message.sticker is not None:
+        sticker = {
+            "id": message.sticker.id,
+            "emoji": message.sticker.emoji,
+            "position": message.sticker.position,
+            "image_url": f"/api/v1/media/{message.sticker.media_object_id}/content",
+            "width": message.sticker.media.width or 512,
+            "height": message.sticker.media.height or 512,
+        }
     return {
         "id": message.id,
         "chat_id": message.chat_id,
@@ -46,4 +71,7 @@ def serialize_message(message: Message, viewer_user_id: int | None = None) -> di
         "timestamp": message.timestamp,
         "edited_at": message.edited_at,
         "deleted_at": message.deleted_at,
+        "attachment": attachment,
+        "sticker": sticker,
+        "key_envelope": message.key_envelope,
     }
