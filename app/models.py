@@ -78,6 +78,14 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    sticker_packs: Mapped[list["StickerPack"]] = relationship(
+        back_populates="owner",
+        cascade="all, delete-orphan",
+    )
+    media_objects: Mapped[list["MediaObject"]] = relationship(
+        back_populates="owner",
+        cascade="all, delete-orphan",
+    )
 
 
 class Device(Base):
@@ -310,15 +318,164 @@ class ChatInvitation(Base):
     invitee: Mapped[User] = relationship(foreign_keys=[invitee_user_id])
 
 
+class MediaObject(Base):
+    __tablename__ = "media_objects"
+    __table_args__ = (
+        CheckConstraint("purpose IN ('attachment', 'sticker')", name="purpose"),
+        CheckConstraint("size_bytes BETWEEN 1 AND 52428800", name="size"),
+        CheckConstraint(
+            "(purpose = 'attachment' AND is_encrypted) OR "
+            "(purpose = 'sticker' AND NOT is_encrypted)",
+            name="encryption_policy",
+        ),
+        CheckConstraint(
+            "(width IS NULL AND height IS NULL) OR "
+            "(width BETWEEN 1 AND 4096 AND height BETWEEN 1 AND 4096)",
+            name="dimensions",
+        ),
+        UniqueConstraint("object_key", name="uq_media_objects_object_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    purpose: Mapped[str] = mapped_column(String(16), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    storage_backend: Mapped[str] = mapped_column(String(16), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_encrypted: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    cipher: Mapped[Optional[str]] = mapped_column(String(32))
+    nonce: Mapped[Optional[str]] = mapped_column(String(64))
+    width: Mapped[Optional[int]] = mapped_column(Integer)
+    height: Mapped[Optional[int]] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    owner: Mapped[User] = relationship(back_populates="media_objects")
+
+
+class StickerPack(Base):
+    __tablename__ = "sticker_packs"
+    __table_args__ = (
+        CheckConstraint("visibility IN ('public', 'private')", name="visibility"),
+        CheckConstraint("length(trim(title)) BETWEEN 1 AND 64", name="title_length"),
+        UniqueConstraint("owner_user_id", "slug", name="uq_sticker_packs_owner_slug"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(64), nullable=False)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    visibility: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="private", server_default="private"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    owner: Mapped[User] = relationship(back_populates="sticker_packs")
+    stickers: Mapped[list["Sticker"]] = relationship(
+        back_populates="pack",
+        cascade="all, delete-orphan",
+        order_by="Sticker.position",
+    )
+    subscribers: Mapped[list["StickerPackSubscription"]] = relationship(
+        back_populates="pack",
+        cascade="all, delete-orphan",
+    )
+
+
+class Sticker(Base):
+    __tablename__ = "stickers"
+    __table_args__ = (
+        CheckConstraint("position >= 0", name="position"),
+        UniqueConstraint("pack_id", "position", name="uq_stickers_pack_position"),
+        UniqueConstraint("media_object_id", name="uq_stickers_media_object"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    pack_id: Mapped[str] = mapped_column(
+        ForeignKey("sticker_packs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    media_object_id: Mapped[str] = mapped_column(
+        ForeignKey("media_objects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    emoji: Mapped[Optional[str]] = mapped_column(String(32))
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    pack: Mapped[StickerPack] = relationship(back_populates="stickers")
+    media: Mapped[MediaObject] = relationship()
+
+
+class StickerPackSubscription(Base):
+    __tablename__ = "sticker_pack_subscriptions"
+
+    pack_id: Mapped[str] = mapped_column(
+        ForeignKey("sticker_packs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    pack: Mapped[StickerPack] = relationship(back_populates="subscribers")
+    user: Mapped[User] = relationship()
+
+
 class Message(Base):
     __tablename__ = "messages"
     __table_args__ = (
         CheckConstraint(
             "(deleted_at IS NOT NULL AND content = '') OR "
-            "(deleted_at IS NULL AND length(content) BETWEEN 1 AND 16384)",
+            "(deleted_at IS NULL AND kind IN ('text', 'system') "
+            "AND length(content) BETWEEN 1 AND 16384) OR "
+            "(deleted_at IS NULL AND kind = 'sticker' AND content = '') OR "
+            "(deleted_at IS NULL AND kind IN ('image', 'file') "
+            "AND length(content) BETWEEN 0 AND 4096)",
             name="content_length",
         ),
-        CheckConstraint("kind IN ('user', 'system')", name="kind"),
+        CheckConstraint(
+            "kind IN ('text', 'sticker', 'image', 'file', 'system')",
+            name="kind",
+        ),
+        CheckConstraint(
+            "(kind = 'sticker' AND sticker_id IS NOT NULL "
+            "AND attachment_id IS NULL) OR "
+            "(kind IN ('image', 'file') AND attachment_id IS NOT NULL "
+            "AND sticker_id IS NULL) OR "
+            "(kind IN ('text', 'system') AND attachment_id IS NULL "
+            "AND sticker_id IS NULL)",
+            name="typed_payload",
+        ),
         Index("ix_messages_chat_timestamp", "chat_id", "timestamp", "id"),
         UniqueConstraint(
             "sender_user_id",
@@ -345,9 +502,16 @@ class Message(Base):
     kind: Mapped[str] = mapped_column(
         String(16),
         nullable=False,
-        default="user",
-        server_default="user",
+        default="text",
+        server_default="text",
     )
+    attachment_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("media_objects.id", ondelete="RESTRICT"),
+    )
+    sticker_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("stickers.id", ondelete="RESTRICT"),
+    )
+    key_envelope: Mapped[Optional[str]] = mapped_column(Text)
     client_id: Mapped[Optional[str]] = mapped_column(String(36))
     server_seq: Mapped[int] = mapped_column(Integer, nullable=False)
     reply_to_id: Mapped[Optional[int]] = mapped_column(
@@ -367,6 +531,10 @@ class Message(Base):
         remote_side="Message.id",
         foreign_keys=[reply_to_id],
     )
+    attachment: Mapped[Optional[MediaObject]] = relationship(
+        foreign_keys=[attachment_id]
+    )
+    sticker: Mapped[Optional[Sticker]] = relationship(foreign_keys=[sticker_id])
     receipts: Mapped[list["MessageReceipt"]] = relationship(
         back_populates="message",
         cascade="all, delete-orphan",
