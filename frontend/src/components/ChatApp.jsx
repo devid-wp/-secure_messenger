@@ -11,6 +11,7 @@ import {
   MessageComposer,
   MessageStatus,
   MessagesSkeleton,
+  MobileNavigation,
   Modal,
   SearchInput,
 } from './MessengerUI'
@@ -223,6 +224,7 @@ function ChatApp({ token, login, onLogout }) {
 
   const conversations = useMemo(() => {
     const existingDmUsers = new Set()
+    const normalizedQuery = searchQuery.trim().toLowerCase()
     const existingChats = chats.map((chat) => {
       if (chat.type === 'dm') {
         const otherLogin = chat.members.find((member) => member !== login)
@@ -241,7 +243,9 @@ function ChatApp({ token, login, onLogout }) {
         lastMessage: chat.last_message,
         unreadCount: chat.unread_count || 0,
       }
-    })
+    }).filter((conversation) => (
+      !normalizedQuery || conversation.label.toLowerCase().includes(normalizedQuery)
+    ))
     const newDirectChats = searchResults
       .filter((user) => !existingDmUsers.has(user.login))
       .map((user) => ({
@@ -263,7 +267,12 @@ function ChatApp({ token, login, onLogout }) {
       const rightTime = right.lastMessage?.timestamp || ''
       return rightTime.localeCompare(leftTime)
     })
-  }, [chats, login, searchResults])
+  }, [chats, login, searchQuery, searchResults])
+
+  const totalUnread = useMemo(
+    () => chats.reduce((total, chat) => total + (chat.unread_count || 0), 0),
+    [chats]
+  )
 
   const selectedConversation = conversations.find(
     (conversation) => conversation.chatId === selectedChatId
@@ -336,8 +345,8 @@ function ChatApp({ token, login, onLogout }) {
       return undefined
     }
     const controller = new AbortController()
-    setSearchLoading(true)
     const timer = window.setTimeout(async () => {
+      setSearchLoading(true)
       try {
         const response = await fetch(
           `${API_URL}/api/v1/users/search?q=${encodeURIComponent(query)}`,
@@ -1182,7 +1191,10 @@ function ChatApp({ token, login, onLogout }) {
   const handleSearchChange = (event) => {
     const value = event.target.value
     setSearchQuery(value)
-    if (value.trim().length < 2) setSearchResults([])
+    if (value.trim().length < 2) {
+      setSearchResults([])
+      setSearchLoading(false)
+    }
   }
 
   const showConversationList = () => {
@@ -1242,12 +1254,12 @@ function ChatApp({ token, login, onLogout }) {
           </div>
           <button className="new-chat-button icon-button" type="button" onClick={() => setGroupDialogOpen(true)} aria-label="Create group"><Icon name="compose" /></button>
           {mainMenuOpen && (
-            <div className="main-menu">
-              <button type="button" onClick={() => { setGroupDialogOpen(true); setMainMenuOpen(false) }}>New group</button>
-              <button type="button" onClick={() => { openProfile(); setMainMenuOpen(false) }}>My profile</button>
-              <button type="button" onClick={openStickerManager}>Sticker packs</button>
-              <button type="button" onClick={toggle}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
-              <button type="button" className="danger-action" onClick={handleLogout}>Sign out</button>
+            <div className="main-menu" role="menu">
+              <button role="menuitem" type="button" onClick={() => { setGroupDialogOpen(true); setMainMenuOpen(false) }}>New group</button>
+              <button role="menuitem" type="button" onClick={() => { openProfile(); setMainMenuOpen(false) }}>My profile</button>
+              <button role="menuitem" type="button" onClick={openStickerManager}>Sticker packs</button>
+              <button role="menuitem" type="button" onClick={toggle}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
+              <button role="menuitem" type="button" className="danger-action" onClick={handleLogout}>Sign out</button>
             </div>
           )}
         </header>
@@ -1283,6 +1295,11 @@ function ChatApp({ token, login, onLogout }) {
           </button>
         ))}
 
+        <MobileNavigation
+          unreadCount={totalUnread}
+          onNewGroup={() => setGroupDialogOpen(true)}
+          onProfile={openProfile}
+        />
         <button className="user-bar" type="button" onClick={openProfile}>
           <Avatar name={profile.display_name || login} size={42} src={profile.avatar_url} />
           <div className="user-bar__info">
@@ -1302,7 +1319,7 @@ function ChatApp({ token, login, onLogout }) {
         />
         <div className="chat-menu-anchor">
             {chatMenuOpen && selectedConversation && (
-              <div className="chat-actions-menu">
+              <div className="chat-actions-menu" role="menu">
                 {selectedConversation.type === 'dm' && <button type="button" onClick={blockSelectedUser}>Block user</button>}
                 {selectedConversation.type === 'group' && ['owner', 'admin'].includes(selectedGroupRole) && (
                   <>

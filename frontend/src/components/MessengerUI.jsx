@@ -146,7 +146,7 @@ export function ContactListItem({ conversation, active, onSelect }) {
 
 export function ConnectionStatus({ connected }) {
   return (
-    <span className={`connection-chip ${connected ? 'is-connected' : 'is-connecting'}`}>
+    <span className={`connection-chip ${connected ? 'is-connected' : 'is-connecting'}`} role="status" aria-live="polite">
       <span className="connection-chip__mark" />
       {connected ? 'CONNECTED' : 'RECONNECTING'}
     </span>
@@ -285,7 +285,7 @@ export function MessageComposer({ inputRef, value, onChange, onSubmit, onSticker
 export function Modal({ title, children, onClose }) {
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose} onKeyDown={(event) => event.key === 'Escape' && onClose()}>
-      <section className="modal-card" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
+      <section className="modal-card" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()} tabIndex={-1} autoFocus>
         <header className="modal-card__header">
           <h2>{title}</h2>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close"><Icon name="close" /></button>
@@ -314,5 +314,25 @@ export function MessagesSkeleton() {
     <div className="messages-skeleton" aria-label="Loading messages" aria-busy="true">
       <span /><span /><span /><span />
     </div>
+  )
+}
+
+export function MobileNavigation({ unreadCount, onNewGroup, onProfile }) {
+  return (
+    <nav className="mobile-navigation" aria-label="Mobile navigation">
+      <span className="mobile-navigation__active">
+        <Icon name="shield" size={18} />
+        Chats
+        {unreadCount > 0 && <i>{Math.min(unreadCount, 99)}</i>}
+      </span>
+      <button type="button" onClick={onNewGroup}>
+        <Icon name="compose" size={18} />
+        New group
+      </button>
+      <button type="button" onClick={onProfile}>
+        <Icon name="more" size={18} />
+        Profile
+      </button>
+    </nav>
   )
 }
