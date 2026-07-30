@@ -52,6 +52,83 @@ function messageTime(timestamp) {
   })
 }
 
+function websocketMessagePayload(message) {
+  return {
+    type: 'send_message',
+    kind: message.kind || 'text',
+    chat_id: message.chat_id,
+    content: message.content,
+    client_id: message.client_id,
+    reply_to_server_seq: message.reply_to_server_seq,
+    sticker_id: message.sticker?.id ?? message.sticker_id ?? null,
+    attachment_id: message.attachment?.id ?? message.attachment_id ?? null,
+    key_envelope: message.key_envelope ?? null,
+  }
+}
+
+function AuthenticatedMedia({ path, token, alt, className }) {
+  const [source, setSource] = useState('')
+
+  useEffect(() => {
+    if (!path) return undefined
+    let active = true
+    let objectUrl = ''
+    fetch(path.startsWith('/') ? `${API_URL}${path}` : path, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error('Media unavailable')
+        return response.blob()
+      })
+      .then((blob) => {
+        if (!active) return
+        objectUrl = URL.createObjectURL(blob)
+        setSource(objectUrl)
+      })
+      .catch(() => {
+        if (active) setSource('')
+      })
+    return () => {
+      active = false
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [path, token])
+
+  return source
+    ? <img className={className} src={source} alt={alt} />
+    : <span className={`${className} media-loading`} aria-label="Loading media" />
+}
+
+async function cropSticker(file, zoom) {
+  const bitmap = await createImageBitmap(file)
+  const sourceSize = Math.min(bitmap.width, bitmap.height) / zoom
+  const sourceX = (bitmap.width - sourceSize) / 2
+  const sourceY = (bitmap.height - sourceSize) / 2
+  const canvas = document.createElement('canvas')
+  canvas.width = 512
+  canvas.height = 512
+  const context = canvas.getContext('2d')
+  context.drawImage(
+    bitmap,
+    sourceX,
+    sourceY,
+    sourceSize,
+    sourceSize,
+    0,
+    0,
+    512,
+    512
+  )
+  bitmap.close()
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => blob ? resolve(blob) : reject(new Error('Could not crop image')),
+      'image/webp',
+      0.92
+    )
+  })
+}
+
 function ChatApp({ token, login, onLogout }) {
   const { theme, toggle } = useTheme()
   const [chats, setChats] = useState([])
@@ -73,6 +150,22 @@ function ChatApp({ token, login, onLogout }) {
   const [profileAvatarPreview, setProfileAvatarPreview] = useState(null)
   const [profileFormError, setProfileFormError] = useState('')
   const [profileSaving, setProfileSaving] = useState(false)
+  const [stickerPickerOpen, setStickerPickerOpen] = useState(false)
+  const [stickerManagerOpen, setStickerManagerOpen] = useState(false)
+  const [stickerPacks, setStickerPacks] = useState([])
+  const [discoverPacks, setDiscoverPacks] = useState([])
+  const [ownedPacks, setOwnedPacks] = useState([])
+  const [selectedPackId, setSelectedPackId] = useState('')
+  const [packDraft, setPackDraft] = useState({
+    title: '',
+    slug: '',
+    visibility: 'private',
+  })
+  const [stickerFile, setStickerFile] = useState(null)
+  const [stickerPreview, setStickerPreview] = useState('')
+  const [stickerZoom, setStickerZoom] = useState(1)
+  const [stickerBusy, setStickerBusy] = useState(false)
+  const [stickerError, setStickerError] = useState('')
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [groupName, setGroupName] = useState('')
   const [groupAvatar, setGroupAvatar] = useState(null)
@@ -91,6 +184,7 @@ function ChatApp({ token, login, onLogout }) {
   const reconnectTimerRef = useRef(null)
   const readReceiptsRef = useRef(new Set())
   const profileAvatarPreviewRef = useRef(null)
+  const stickerPreviewRef = useRef(null)
 
   const authHeaders = useMemo(
     () => ({ Authorization: `Bearer ${token}` }),
@@ -100,6 +194,9 @@ function ChatApp({ token, login, onLogout }) {
   useEffect(() => () => {
     if (profileAvatarPreviewRef.current) {
       URL.revokeObjectURL(profileAvatarPreviewRef.current)
+    }
+    if (stickerPreviewRef.current) {
+      URL.revokeObjectURL(stickerPreviewRef.current)
     }
   }, [])
 
@@ -319,13 +416,7 @@ function ChatApp({ token, login, onLogout }) {
         setError('')
         for (const pending of outboxRef.current) {
           updateMessageStatus(pending.client_id, 'sending')
-          ws.send(JSON.stringify({
-            type: 'send_message',
-            chat_id: pending.chat_id,
-            text: pending.content,
-            client_id: pending.client_id,
-            reply_to_server_seq: pending.reply_to_server_seq,
-          }))
+          ws.send(JSON.stringify(websocketMessagePayload(pending)))
         }
         setHistoryRefresh((value) => value + 1)
       }
@@ -491,6 +582,7 @@ function ChatApp({ token, login, onLogout }) {
       chat_id: selectedChatId,
       sender: login,
       content: text,
+      kind: 'text',
       client_id: clientId,
       server_seq: null,
       timestamp: new Date().toISOString(),
@@ -503,13 +595,7 @@ function ChatApp({ token, login, onLogout }) {
     writeOutbox(login, outboxRef.current)
     setMessages((previous) => [...previous, pendingMessage])
     if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'send_message',
-        chat_id: selectedChatId,
-        text,
-        client_id: clientId,
-        reply_to_server_seq: replyingTo?.server_seq ?? null,
-      }))
+      ws.send(JSON.stringify(websocketMessagePayload(pendingMessage)))
     }
     window.setTimeout(() => {
       if (outboxRef.current.some((item) => item.client_id === clientId)) {
@@ -752,6 +838,227 @@ function ChatApp({ token, login, onLogout }) {
     }
   }
 
+  const loadStickerPacks = async (scope) => {
+    const response = await fetch(
+      `${API_URL}/api/v1/sticker-packs?scope=${scope}`,
+      { headers: authHeaders }
+    )
+    if (!response.ok) throw new Error('Could not load sticker packs')
+    return response.json()
+  }
+
+  const openStickerPicker = async () => {
+    setStickerError('')
+    setStickerPickerOpen(true)
+    try {
+      setStickerPacks(await loadStickerPacks('library'))
+    } catch (loadError) {
+      setStickerError(loadError.message)
+    }
+  }
+
+  const openStickerManager = async () => {
+    setMainMenuOpen(false)
+    setStickerError('')
+    setStickerManagerOpen(true)
+    try {
+      const [owned, discover] = await Promise.all([
+        loadStickerPacks('owned'),
+        loadStickerPacks('discover'),
+      ])
+      setOwnedPacks(owned)
+      setDiscoverPacks(discover)
+      setSelectedPackId((current) => (
+        current || owned[0]?.id || ''
+      ))
+    } catch (loadError) {
+      setStickerError(loadError.message)
+    }
+  }
+
+  const createStickerPack = async (event) => {
+    event.preventDefault()
+    setStickerBusy(true)
+    setStickerError('')
+    try {
+      const response = await fetch(`${API_URL}/api/v1/sticker-packs`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify(packDraft),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.detail || 'Could not create sticker pack')
+      }
+      setOwnedPacks((previous) => [...previous, data])
+      if (data.visibility === 'public') {
+        setDiscoverPacks((previous) => [...previous, data])
+      }
+      setSelectedPackId(data.id)
+      setPackDraft({ title: '', slug: '', visibility: 'private' })
+    } catch (createError) {
+      setStickerError(createError.message)
+    } finally {
+      setStickerBusy(false)
+    }
+  }
+
+  const selectStickerFile = (event) => {
+    const file = event.target.files[0] || null
+    if (stickerPreviewRef.current) {
+      URL.revokeObjectURL(stickerPreviewRef.current)
+      stickerPreviewRef.current = null
+    }
+    setStickerFile(null)
+    setStickerPreview('')
+    setStickerZoom(1)
+    setStickerError('')
+    if (!file) return
+    if (!['image/png', 'image/webp'].includes(file.type)) {
+      setStickerError('Choose a PNG or WebP image.')
+      event.target.value = ''
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setStickerError('Sticker source must be 5 MB or smaller.')
+      event.target.value = ''
+      return
+    }
+    const previewUrl = URL.createObjectURL(file)
+    stickerPreviewRef.current = previewUrl
+    setStickerFile(file)
+    setStickerPreview(previewUrl)
+  }
+
+  const uploadSticker = async (event) => {
+    event.preventDefault()
+    if (!selectedPackId || !stickerFile) return
+    setStickerBusy(true)
+    setStickerError('')
+    try {
+      const cropped = await cropSticker(stickerFile, stickerZoom)
+      const formData = new FormData()
+      formData.append('sticker', cropped, 'sticker.webp')
+      const response = await fetch(
+        `${API_URL}/api/v1/sticker-packs/${selectedPackId}/stickers`,
+        {
+          method: 'POST',
+          headers: authHeaders,
+          body: formData,
+        }
+      )
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.detail || 'Could not upload sticker')
+      }
+      setOwnedPacks((previous) => previous.map((pack) => (
+        pack.id === selectedPackId
+          ? { ...pack, stickers: [...pack.stickers, data] }
+          : pack
+      )))
+      setDiscoverPacks((previous) => previous.map((pack) => (
+        pack.id === selectedPackId
+          ? { ...pack, stickers: [...pack.stickers, data] }
+          : pack
+      )))
+      setStickerFile(null)
+      setStickerPreview('')
+      if (stickerPreviewRef.current) {
+        URL.revokeObjectURL(stickerPreviewRef.current)
+        stickerPreviewRef.current = null
+      }
+    } catch (uploadError) {
+      setStickerError(uploadError.message)
+    } finally {
+      setStickerBusy(false)
+    }
+  }
+
+  const subscribeToStickerPack = async (packId) => {
+    setStickerError('')
+    const response = await fetch(
+      `${API_URL}/api/v1/sticker-packs/${packId}/subscription`,
+      { method: 'POST', headers: authHeaders }
+    )
+    if (!response.ok) {
+      setStickerError('Could not add sticker pack')
+      return
+    }
+    const [owned, discover] = await Promise.all([
+      loadStickerPacks('owned'),
+      loadStickerPacks('discover'),
+    ])
+    setOwnedPacks(owned)
+    setDiscoverPacks(discover)
+  }
+
+  const unsubscribeFromStickerPack = async (packId) => {
+    setStickerError('')
+    const response = await fetch(
+      `${API_URL}/api/v1/sticker-packs/${packId}/subscription`,
+      { method: 'DELETE', headers: authHeaders }
+    )
+    if (!response.ok) {
+      setStickerError('Could not remove sticker pack')
+      return
+    }
+    setDiscoverPacks((previous) => previous.map((pack) => (
+      pack.id === packId ? { ...pack, subscribed: false } : pack
+    )))
+    setStickerPacks((previous) => previous.filter((pack) => pack.id !== packId))
+  }
+
+  const toggleStickerPackVisibility = async (pack) => {
+    const visibility = pack.visibility === 'public' ? 'private' : 'public'
+    setStickerError('')
+    const response = await fetch(
+      `${API_URL}/api/v1/sticker-packs/${pack.id}`,
+      {
+        method: 'PATCH',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visibility }),
+      }
+    )
+    if (!response.ok) {
+      setStickerError('Could not update pack visibility')
+      return
+    }
+    const updated = await response.json()
+    setOwnedPacks((previous) => previous.map((item) => (
+      item.id === updated.id ? updated : item
+    )))
+    const discover = await loadStickerPacks('discover')
+    setDiscoverPacks(discover)
+  }
+
+  const sendSticker = (sticker) => {
+    const ws = wsRef.current
+    if (selectedChatId === null) return
+    const clientId = crypto.randomUUID()
+    const pendingMessage = {
+      id: `pending:${clientId}`,
+      chat_id: selectedChatId,
+      sender: login,
+      content: '',
+      kind: 'sticker',
+      sticker,
+      client_id: clientId,
+      server_seq: null,
+      timestamp: new Date().toISOString(),
+      status: 'sending',
+      reply_to_server_seq: null,
+      reply_to_sender: null,
+      reply_to_content: null,
+    }
+    outboxRef.current = [...outboxRef.current, pendingMessage]
+    writeOutbox(login, outboxRef.current)
+    setMessages((previous) => [...previous, pendingMessage])
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(websocketMessagePayload(pendingMessage)))
+    }
+    setStickerPickerOpen(false)
+  }
+
   const leaveGroup = async () => {
     if (!selectedChatId || !window.confirm('Leave this group?')) return
     const response = await fetch(
@@ -825,6 +1132,7 @@ function ChatApp({ token, login, onLogout }) {
             <div className="main-menu">
               <button type="button" onClick={() => { setGroupDialogOpen(true); setMainMenuOpen(false) }}>New group</button>
               <button type="button" onClick={() => { openProfile(); setMainMenuOpen(false) }}>My profile</button>
+              <button type="button" onClick={openStickerManager}>Sticker packs</button>
               <button type="button" onClick={toggle}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
               <button type="button" className="danger-action" onClick={handleLogout}>Sign out</button>
             </div>
@@ -942,11 +1250,32 @@ function ChatApp({ token, login, onLogout }) {
                       </span>
                     </div>
                   )}
-                  <div className="message__bubble">
-                    <span className="message__text">
-                      {message.deleted_at ? 'Message deleted' : message.content}
-                    </span>
-                  </div>
+                  {message.deleted_at ? (
+                    <div className="message__bubble">
+                      <span className="message__text">Message deleted</span>
+                    </div>
+                  ) : message.kind === 'sticker' && message.sticker ? (
+                    <div className="message__sticker">
+                      <AuthenticatedMedia
+                        path={message.sticker.image_url}
+                        token={token}
+                        alt={message.sticker.emoji || 'Sticker'}
+                        className="message__sticker-image"
+                      />
+                    </div>
+                  ) : ['image', 'file'].includes(message.kind) && message.attachment ? (
+                    <div className="message__attachment">
+                      <Icon name={message.kind === 'image' ? 'sticker' : 'attach'} />
+                      <span>
+                        <strong>{message.kind === 'image' ? 'Encrypted image' : 'Encrypted file'}</strong>
+                        <small>{Math.ceil(message.attachment.size_bytes / 1024)} KB · {message.attachment.cipher}</small>
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="message__bubble">
+                      <span className="message__text">{message.content}</span>
+                    </div>
+                  )}
                   <span className="message__time">
                     {messageTime(message.timestamp)}
                     {message.edited_at && !message.deleted_at && <span className="edited-label">edited</span>}
@@ -976,9 +1305,38 @@ function ChatApp({ token, login, onLogout }) {
           value={inputText}
           onChange={(event) => setInputText(event.target.value)}
           onSubmit={sendMessage}
+          onSticker={openStickerPicker}
           conversation={selectedConversation}
           disabled={selectedChatId === null}
         />
+        {stickerPickerOpen && (
+          <div className="sticker-picker">
+            <header>
+              <strong>Stickers</strong>
+              <button type="button" className="icon-button" onClick={() => setStickerPickerOpen(false)} aria-label="Close sticker picker"><Icon name="close" /></button>
+            </header>
+            {stickerError && <p className="profile-form-error">{stickerError}</p>}
+            {stickerPacks.length === 0 ? (
+              <div className="sticker-picker__empty">
+                <span>No sticker packs yet.</span>
+                <button type="button" onClick={() => { setStickerPickerOpen(false); openStickerManager() }}>Manage packs</button>
+              </div>
+            ) : (
+              stickerPacks.map((pack) => (
+                <section className="sticker-picker__pack" key={pack.id}>
+                  <h3>{pack.title}</h3>
+                  <div className="sticker-grid">
+                    {pack.stickers.map((sticker) => (
+                      <button type="button" key={sticker.id} onClick={() => sendSticker(sticker)} title={sticker.emoji || 'Send sticker'}>
+                        <AuthenticatedMedia path={sticker.image_url} token={token} alt="" className="sticker-image" />
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ))
+            )}
+          </div>
+        )}
       </main>
 
       {groupDialogOpen && (
@@ -1012,6 +1370,127 @@ function ChatApp({ token, login, onLogout }) {
               {profileSaving ? 'Saving…' : 'Save changes'}
             </button>
           </form>
+        </Modal>
+      )}
+
+      {stickerManagerOpen && (
+        <Modal title="Sticker studio" onClose={() => setStickerManagerOpen(false)}>
+          <div className="sticker-manager">
+            {stickerError && <p className="profile-form-error" role="alert">{stickerError}</p>}
+            <section className="sticker-manager__section">
+              <div className="section-heading">
+                <div>
+                  <h3>Create a pack</h3>
+                  <p>Build a public pack or keep it private.</p>
+                </div>
+              </div>
+              <form className="pack-create-form" onSubmit={createStickerPack}>
+                <input
+                  value={packDraft.title}
+                  maxLength={64}
+                  placeholder="Pack title"
+                  required
+                  onChange={(event) => {
+                    const title = event.target.value
+                    setPackDraft((value) => ({
+                      ...value,
+                      title,
+                      slug: value.slug || title.toLowerCase()
+                        .replace(/[^a-z0-9]+/g, '-')
+                        .replace(/^-|-$/g, ''),
+                    }))
+                  }}
+                />
+                <input
+                  value={packDraft.slug}
+                  minLength={2}
+                  maxLength={64}
+                  pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+                  placeholder="pack-slug"
+                  required
+                  onChange={(event) => setPackDraft((value) => ({ ...value, slug: event.target.value.toLowerCase() }))}
+                />
+                <select value={packDraft.visibility} onChange={(event) => setPackDraft((value) => ({ ...value, visibility: event.target.value }))}>
+                  <option value="private">Private</option>
+                  <option value="public">Public</option>
+                </select>
+                <button className="primary-button" type="submit" disabled={stickerBusy}>Create pack</button>
+              </form>
+            </section>
+
+            <section className="sticker-manager__section">
+              <div className="section-heading">
+                <div>
+                  <h3>Add a sticker</h3>
+                  <p>PNG or WebP, up to 5 MB. Crop and scale before upload.</p>
+                </div>
+              </div>
+              {ownedPacks.length === 0 ? (
+                <p className="section-empty">Create your first pack above.</p>
+              ) : (
+                <>
+                  <div className="owned-pack-list">
+                    {ownedPacks.map((pack) => (
+                      <article className={selectedPackId === pack.id ? 'active' : ''} key={pack.id}>
+                        <button type="button" className="owned-pack-select" onClick={() => setSelectedPackId(pack.id)}>
+                          <span>{pack.title}<small>{pack.stickers.length} stickers</small></span>
+                        </button>
+                        <button type="button" className="visibility-toggle" onClick={() => toggleStickerPackVisibility(pack)}>
+                          {pack.visibility}
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                  <form className="sticker-upload-form" onSubmit={uploadSticker}>
+                    <label className="sticker-cropper">
+                      <span className="sticker-cropper__viewport">
+                        {stickerPreview
+                          ? <img src={stickerPreview} alt="Sticker crop preview" style={{ transform: `scale(${stickerZoom})` }} />
+                          : <span>Choose PNG or WebP</span>}
+                      </span>
+                      <input type="file" accept="image/png,image/webp" onChange={selectStickerFile} />
+                    </label>
+                    {stickerFile && (
+                      <label className="zoom-control">
+                        Scale
+                        <input type="range" min="1" max="2.5" step="0.05" value={stickerZoom} onChange={(event) => setStickerZoom(Number(event.target.value))} />
+                      </label>
+                    )}
+                    <button className="primary-button" type="submit" disabled={!stickerFile || stickerBusy}>
+                      {stickerBusy ? 'Processing…' : 'Add sticker'}
+                    </button>
+                  </form>
+                </>
+              )}
+            </section>
+
+            <section className="sticker-manager__section">
+              <div className="section-heading">
+                <div>
+                  <h3>Discover public packs</h3>
+                  <p>Add community packs to your library.</p>
+                </div>
+              </div>
+              <div className="pack-list">
+                {discoverPacks.map((pack) => (
+                  <article className="pack-card" key={pack.id}>
+                    <div>
+                      <strong>{pack.title}</strong>
+                      <span>@{pack.owner} · {pack.stickers.length} stickers</span>
+                    </div>
+                    {pack.editable ? (
+                      <span className="pack-state">Yours</span>
+                    ) : pack.subscribed ? (
+                      <button type="button" className="pack-remove" onClick={() => unsubscribeFromStickerPack(pack.id)}>Remove</button>
+                    ) : (
+                      <button type="button" onClick={() => subscribeToStickerPack(pack.id)}>Add</button>
+                    )}
+                  </article>
+                ))}
+                {discoverPacks.length === 0 && <p className="section-empty">No public packs yet.</p>}
+              </div>
+            </section>
+          </div>
         </Modal>
       )}
 

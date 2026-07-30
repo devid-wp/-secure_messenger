@@ -30,6 +30,7 @@ export function Icon({ name, size = 18 }) {
     back: <path d="m15 18-6-6 6-6" />,
     send: <path d="m4 4 17 8-17 8 3-8-3-8Zm3 8h14" />,
     attach: <path d="m9 17 7.6-7.6a3.5 3.5 0 0 0-5-5L4.8 11.2a5 5 0 0 0 7 7l6.4-6.4" />,
+    sticker: <><path d="M5 4h14a1 1 0 0 1 1 1v9l-6 6H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" /><path d="M14 20v-5a1 1 0 0 1 1-1h5M8 9h.01M16 9h.01M8.5 13c2 1.7 5 1.7 7 0" /></>,
     reply: <path d="m10 8-5 4 5 4v-3h4c3 0 5 1 6 4 0-6-3-8-10-8V8Z" />,
     edit: <path d="m13.5 5.5 5 5M5 19l3.8-.8L19 7a2.1 2.1 0 0 0-3-3L4.8 14.2 4 18z" />,
     trash: <><path d="M5 7h14M9 7V4h6v3M8 10v8m4-8v8m4-8v8M7 7l1 14h8l1-14" /></>,
@@ -166,7 +167,7 @@ export function MessageActions({ message, own, onReply, onEdit, onDelete }) {
       <button type="button" onClick={() => onReply(message)} title="Reply" aria-label="Reply"><Icon name="reply" size={16} /></button>
       {own && (
         <>
-          <button type="button" onClick={() => onEdit(message)} title="Edit" aria-label="Edit"><Icon name="edit" size={15} /></button>
+          {message.kind === 'text' && <button type="button" onClick={() => onEdit(message)} title="Edit" aria-label="Edit"><Icon name="edit" size={15} /></button>}
           <button type="button" onClick={() => onDelete(message)} title="Delete" aria-label="Delete"><Icon name="trash" size={15} /></button>
         </>
       )}
@@ -191,7 +192,7 @@ export function EmptyState({ conversation }) {
   )
 }
 
-export function MessageComposer({ inputRef, value, onChange, onSubmit, conversation, disabled }) {
+export function MessageComposer({ inputRef, value, onChange, onSubmit, onSticker, conversation, disabled }) {
   const handleChange = (event) => {
     event.target.style.height = 'auto'
     event.target.style.height = `${Math.min(event.target.scrollHeight, 120)}px`
@@ -207,6 +208,16 @@ export function MessageComposer({ inputRef, value, onChange, onSubmit, conversat
     <form className={`message-composer ${value.trim() ? 'has-content' : ''}`} onSubmit={onSubmit}>
       <button type="button" className="icon-button composer-attach" disabled title="File attachments are coming soon" aria-label="File attachments are not available yet">
         <Icon name="attach" />
+      </button>
+      <button
+        type="button"
+        className="icon-button composer-sticker"
+        disabled={disabled}
+        onClick={onSticker}
+        title="Send a sticker"
+        aria-label="Open sticker picker"
+      >
+        <Icon name="sticker" />
       </button>
       <div className="composer-input">
         <textarea
