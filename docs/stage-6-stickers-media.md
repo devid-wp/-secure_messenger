@@ -21,10 +21,16 @@ The attachment table never stores a file key. An attachment message has an
 opaque `key_envelope`, intended to be an MLS application ciphertext containing
 the random file key and encrypted client-side metadata.
 
-The current browser client cannot create that envelope because the OpenMLS/WASM
-application-encryption layer from Stage 5 is not complete. Consequently, the
-attachment button remains disabled. Sending a plaintext file key as a temporary
-shortcut would defeat the E2EE design and is explicitly rejected.
+The browser now supports an explicitly transitional `dev-aesgcm-v1` envelope.
+It encrypts the file with a random AES-256-GCM key before upload and allows chat
+members to decrypt it in the browser. The key and original filename are carried
+inside the message envelope.
+
+This mode is **encrypted storage, not E2EE**: until the OpenMLS application layer
+wraps that envelope, the server can read it and therefore recover the file key.
+The UI labels these attachments as `storage encrypted` and must not present them
+as end-to-end encrypted. The transitional envelope is replaced, rather than
+migrated, when the MLS client is connected.
 
 The backend contract is covered by integration tests using an opaque test
 envelope. This proves ciphertext-at-rest and access control, not end-to-end
@@ -79,7 +85,7 @@ trusted.
 
 ## Remaining work
 
-- OpenMLS/WASM application encryption and decryption in a Web Worker.
+- OpenMLS/WASM wrapping of attachment keys in a Web Worker.
 - Random AES-256-GCM file-key generation in the browser.
 - MLS wrapping of the file key and private metadata.
 - Streaming/chunked encryption for large files.

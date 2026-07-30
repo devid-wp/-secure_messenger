@@ -22,7 +22,9 @@ const WS_URL = API_URL
   ? API_URL.replace(/^http/, 'ws')
   : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
 const MAX_AVATAR_BYTES = 50 * 1024 * 1024
+const MAX_ATTACHMENT_BYTES = (50 * 1024 * 1024) - 16
 const AVATAR_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const IMAGE_ATTACHMENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const QUICK_EMOJI = ['😀', '😂', '❤️', '👍', '🔥', '🎉', '😎', '🤝', '👀', '✅', '🔒', '✨', '🙏', '💜', '🚀', '🫡']
 
 function readOutbox(login) {
@@ -70,6 +72,43 @@ function websocketMessagePayload(message) {
   }
 }
 
+function bytesToBase64(bytes) {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize))
+  }
+  return btoa(binary)
+}
+
+function base64ToBytes(value) {
+  const binary = atob(value)
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+}
+
+function createDevelopmentEnvelope(keyBytes, file) {
+  const metadata = bytesToBase64(
+    new TextEncoder().encode(JSON.stringify({
+      name: file.name,
+      type: file.type || 'application/octet-stream',
+    }))
+  )
+  return `dev-aesgcm-v1.${bytesToBase64(keyBytes)}.${metadata}`
+}
+
+function readDevelopmentEnvelope(envelope) {
+  if (!envelope?.startsWith('dev-aesgcm-v1.')) return null
+  try {
+    const [, encodedKey, encodedMetadata] = envelope.split('.')
+    const metadata = JSON.parse(
+      new TextDecoder().decode(base64ToBytes(encodedMetadata))
+    )
+    return { key: base64ToBytes(encodedKey), ...metadata }
+  } catch {
+    return null
+  }
+}
+
 function AuthenticatedMedia({ path, token, alt, className }) {
   const [source, setSource] = useState('')
 
@@ -101,6 +140,76 @@ function AuthenticatedMedia({ path, token, alt, className }) {
   return source
     ? <img className={className} src={source} alt={alt} />
     : <span className={`${className} media-loading`} aria-label="Loading media" />
+}
+
+function EncryptedAttachment({ message, token }) {
+  const [state, setState] = useState({ loading: true, source: '', error: '' })
+  const envelope = useMemo(
+    () => readDevelopmentEnvelope(message.key_envelope),
+    [message.key_envelope]
+  )
+
+  useEffect(() => {
+    if (!message.attachment?.content_url || !envelope) {
+      return undefined
+    }
+    let active = true
+    let objectUrl = ''
+    const decrypt = async () => {
+      try {
+        const response = await fetch(`${API_URL}${message.attachment.content_url}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!response.ok) throw new Error('Download failed')
+        const ciphertext = await response.arrayBuffer()
+        const key = await crypto.subtle.importKey(
+          'raw',
+          envelope.key,
+          { name: 'AES-GCM' },
+          false,
+          ['decrypt']
+        )
+        const plaintext = await crypto.subtle.decrypt(
+          {
+            name: 'AES-GCM',
+            iv: base64ToBytes(message.attachment.nonce),
+          },
+          key,
+          ciphertext
+        )
+        if (!active) return
+        objectUrl = URL.createObjectURL(new Blob(
+          [plaintext],
+          { type: envelope.type || message.attachment.content_type }
+        ))
+        setState({ loading: false, source: objectUrl, error: '' })
+      } catch {
+        if (active) {
+          setState({ loading: false, source: '', error: 'Could not decrypt attachment' })
+        }
+      }
+    }
+    decrypt()
+    return () => {
+      active = false
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [envelope, message.attachment, token])
+
+  if (!message.attachment?.content_url || !envelope) {
+    return <span className="encrypted-media-error">Attachment key is unavailable</span>
+  }
+  if (state.loading) return <span className="encrypted-media-loading">Decrypting…</span>
+  if (state.error) return <span className="encrypted-media-error">{state.error}</span>
+  if (message.kind === 'image') {
+    return <img className="message__encrypted-image" src={state.source} alt={envelope?.name || 'Encrypted attachment'} />
+  }
+  return (
+    <a className="message__file-download" href={state.source} download={envelope?.name || 'attachment'}>
+      <Icon name="attach" />
+      <span><strong>{envelope?.name || 'Encrypted file'}</strong><small>Download decrypted file</small></span>
+    </a>
+  )
 }
 
 async function cropSticker(file, zoom) {
@@ -160,7 +269,7 @@ function ChatApp({ token, login, onLogout }) {
   const [stickerPickerOpen, setStickerPickerOpen] = useState(false)
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
   const [dragActive, setDragActive] = useState(false)
-  const [attachmentNotice, setAttachmentNotice] = useState(null)
+  const [attachmentBusy, setAttachmentBusy] = useState(false)
   const [stickerManagerOpen, setStickerManagerOpen] = useState(false)
   const [stickerPacks, setStickerPacks] = useState([])
   const [discoverPacks, setDiscoverPacks] = useState([])
@@ -189,6 +298,7 @@ function ChatApp({ token, login, onLogout }) {
   const selectedChatIdRef = useRef(null)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
+  const attachmentInputRef = useRef(null)
   const prependingHistoryRef = useRef(false)
   const outboxRef = useRef(readOutbox(login))
   const reconnectTimerRef = useRef(null)
@@ -485,7 +595,8 @@ function ChatApp({ token, login, onLogout }) {
       }
 
       ws.onerror = () => {
-        setError('Connection lost — messages will remain queued')
+        // The close handler updates connection state and retries automatically.
+        // Avoid showing the same outage as both a banner and an error.
       }
 
       ws.onmessage = (event) => {
@@ -1203,20 +1314,95 @@ function ChatApp({ token, login, onLogout }) {
     setChatMenuOpen(false)
   }
 
-  const chooseAttachment = (files) => {
+  const chooseAttachment = async (files) => {
     const file = files?.[0]
     setDragActive(false)
     if (!file) return
-    if (file.size > 50 * 1024 * 1024) {
+    if (selectedChatId === null) {
+      setError('Select a conversation before attaching a file.')
+      return
+    }
+    if (file.size > MAX_ATTACHMENT_BYTES) {
       setError('Attachments must be 50 MB or smaller.')
       return
     }
-    setAttachmentNotice(file.name)
+    setAttachmentBusy(true)
+    setError('')
+    try {
+      const key = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        true,
+        ['encrypt', 'decrypt']
+      )
+      const keyBytes = new Uint8Array(await crypto.subtle.exportKey('raw', key))
+      const nonce = crypto.getRandomValues(new Uint8Array(12))
+      const plaintext = await file.arrayBuffer()
+      const ciphertext = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: nonce },
+        key,
+        plaintext
+      )
+      let width = null
+      let height = null
+      if (IMAGE_ATTACHMENT_TYPES.has(file.type)) {
+        const bitmap = await createImageBitmap(file)
+        if (bitmap.width <= 4096 && bitmap.height <= 4096) {
+          width = bitmap.width
+          height = bitmap.height
+        }
+        bitmap.close()
+      }
+      const form = new FormData()
+      form.append('ciphertext', new Blob([ciphertext]), 'ciphertext.bin')
+      form.append('plaintext_content_type', file.type || 'application/octet-stream')
+      form.append('cipher', 'AES-256-GCM')
+      form.append('nonce', bytesToBase64(nonce))
+      if (width && height) {
+        form.append('width', String(width))
+        form.append('height', String(height))
+      }
+      const response = await fetch(`${API_URL}/api/v1/media/attachments`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: form,
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        throw new Error(body?.detail || 'Could not upload attachment')
+      }
+      const attachment = await response.json()
+      const clientId = crypto.randomUUID()
+      const kind = IMAGE_ATTACHMENT_TYPES.has(file.type) ? 'image' : 'file'
+      const pendingMessage = {
+        id: `pending:${clientId}`,
+        chat_id: selectedChatId,
+        sender: login,
+        content: '',
+        kind,
+        attachment,
+        key_envelope: createDevelopmentEnvelope(keyBytes, file),
+        client_id: clientId,
+        server_seq: null,
+        timestamp: new Date().toISOString(),
+        status: 'sending',
+      }
+      outboxRef.current = [...outboxRef.current, pendingMessage]
+      writeOutbox(login, outboxRef.current)
+      setMessages((previous) => [...previous, pendingMessage])
+      const ws = wsRef.current
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(websocketMessagePayload(pendingMessage)))
+      }
+    } catch (attachmentError) {
+      setError(attachmentError.message || 'Could not encrypt attachment')
+    } finally {
+      setAttachmentBusy(false)
+    }
   }
 
   const handleDrop = (event) => {
     event.preventDefault()
-    chooseAttachment(event.dataTransfer.files)
+    void chooseAttachment(event.dataTransfer.files)
   }
 
   const insertEmoji = (emoji) => {
@@ -1402,11 +1588,10 @@ function ChatApp({ token, login, onLogout }) {
                     </div>
                   ) : ['image', 'file'].includes(message.kind) && message.attachment ? (
                     <div className="message__attachment">
-                      <Icon name={message.kind === 'image' ? 'sticker' : 'attach'} />
-                      <span>
-                        <strong>{message.kind === 'image' ? 'Encrypted image' : 'Encrypted file'}</strong>
-                        <small>{Math.ceil(message.attachment.size_bytes / 1024)} KB · {message.attachment.cipher}</small>
-                      </span>
+                      <EncryptedAttachment message={message} token={token} />
+                      <small className="message__attachment-mode">
+                        AES-256-GCM · storage encrypted
+                      </small>
                     </div>
                   ) : (
                     <div className="message__bubble">
@@ -1447,10 +1632,27 @@ function ChatApp({ token, login, onLogout }) {
             setEmojiPickerOpen((value) => !value)
             setStickerPickerOpen(false)
           }}
-          onAttach={() => setAttachmentNotice('')}
+          onAttach={() => attachmentInputRef.current?.click()}
           conversation={selectedConversation}
           disabled={selectedChatId === null}
         />
+        <input
+          ref={attachmentInputRef}
+          className="visually-hidden"
+          type="file"
+          disabled={attachmentBusy || selectedChatId === null}
+          onChange={(event) => {
+            void chooseAttachment(event.target.files)
+            event.target.value = ''
+          }}
+          tabIndex={-1}
+        />
+        {attachmentBusy && (
+          <div className="attachment-progress" role="status">
+            <span className="search-spinner" />
+            Encrypting and uploading…
+          </div>
+        )}
         {emojiPickerOpen && (
           <div className="emoji-picker" role="dialog" aria-label="Emoji picker">
             <header><strong>Emoji</strong><span>Quick reactions</span></header>
@@ -1494,27 +1696,9 @@ function ChatApp({ token, login, onLogout }) {
       {dragActive && (
         <div className="drop-overlay" aria-hidden="true">
           <span><Icon name="attach" size={28} /></span>
-          <strong>Check attachment availability</strong>
-          <small>Files stay on your device until encryption is ready</small>
+          <strong>Drop to encrypt and send</strong>
+          <small>AES-256-GCM · up to 50 MB</small>
         </div>
-      )}
-
-      {attachmentNotice !== null && (
-        <Modal title="Encrypted attachments are not ready" onClose={() => setAttachmentNotice(null)}>
-          <div className="attachment-notice">
-            <span className="attachment-notice__icon"><Icon name="shield" size={28} /></span>
-            {attachmentNotice && <strong className="attachment-notice__file">{attachmentNotice}</strong>}
-            <p>
-              This file was not uploaded. Secure Messenger still needs the client-side
-              OpenMLS layer that encrypts the file key for every recipient device.
-            </p>
-            <p>
-              Sending it now would either expose the key to the server or make the file
-              impossible for recipients to open.
-            </p>
-            <button className="primary-button" type="button" onClick={() => setAttachmentNotice(null)}>Got it</button>
-          </div>
-        </Modal>
       )}
 
       {groupDialogOpen && (
