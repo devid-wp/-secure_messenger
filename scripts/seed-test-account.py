@@ -44,6 +44,7 @@ async def seed_test_accounts() -> None:
                     credentials = register_user(login, password)
                     user = User(
                         login=credentials["login"],
+                        username=credentials["login"].lower(),
                         password_hash=credentials["hash"].encode("utf-8"),
                         password_salt=b"",
                     )

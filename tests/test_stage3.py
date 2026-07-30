@@ -72,6 +72,40 @@ class DirectMessagesApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 422)
 
+    def test_public_username_is_unique_changeable_and_keeps_stable_id(self) -> None:
+        alice_token = self.register_and_login("alice")
+        bob_token = self.register_and_login("bob")
+
+        before = self.client.get(
+            "/api/v1/users/me",
+            headers=self.headers(alice_token),
+        )
+        changed = self.client.patch(
+            "/api/v1/users/me",
+            json={"username": "night_signal"},
+            headers=self.headers(alice_token),
+        )
+        duplicate = self.client.patch(
+            "/api/v1/users/me",
+            json={"username": "night_signal"},
+            headers=self.headers(bob_token),
+        )
+        found = self.client.get(
+            "/api/v1/users/search",
+            params={"q": "@night_signal"},
+            headers=self.headers(bob_token),
+        )
+
+        self.assertEqual(before.status_code, 200, before.text)
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.assertEqual(changed.json()["id"], before.json()["id"])
+        self.assertEqual(changed.json()["username"], "night_signal")
+        self.assertEqual(duplicate.status_code, 409, duplicate.text)
+        self.assertEqual(
+            [(user["id"], user["username"]) for user in found.json()],
+            [(before.json()["id"], "night_signal")],
+        )
+
     def test_direct_chat_creation_is_idempotent_and_list_is_private(self) -> None:
         alice_token = self.register_and_login("alice")
         bob_token = self.register_and_login("bob")
@@ -90,6 +124,7 @@ class DirectMessagesApiTests(unittest.TestCase):
         self.assertEqual(first.status_code, 200, first.text)
         self.assertEqual(second.status_code, 200, second.text)
         self.assertEqual(first.json()["id"], second.json()["id"])
+        self.assertEqual(first.json()["peer"]["username"], "bob")
 
         alice_chats = self.client.get(
             "/api/v1/chats/dm", headers=self.headers(alice_token)

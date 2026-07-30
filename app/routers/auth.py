@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import re
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -13,6 +14,21 @@ from app.schemas import Credentials, DeviceResponse, TokenResponse
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+async def _available_username(login: str, session: AsyncSession) -> str:
+    base = re.sub(r"[^a-z0-9_]", "_", login.lower()).strip("_")
+    if len(base) < 3:
+        base = f"user_{base}"
+    base = base[:32]
+
+    candidate = base
+    suffix = 1
+    while await session.scalar(select(User.id).where(User.username == candidate)):
+        ending = f"_{suffix}"
+        candidate = f"{base[: 32 - len(ending)]}{ending}"
+        suffix += 1
+    return candidate
 
 
 @router.post("/register", status_code=201)
@@ -32,6 +48,7 @@ async def register(
 
     user = User(
         login=record["login"],
+        username=await _available_username(record["login"], session),
         password_hash=record["hash"].encode(),
         password_salt=b"",
     )

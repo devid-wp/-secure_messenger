@@ -55,7 +55,9 @@ class KeyPackageResponse(BaseModel):
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    id: int
     login: str
+    username: str
     display_name: str | None
     bio: str | None
     avatar_url: str | None
@@ -63,12 +65,26 @@ class UserResponse(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
+    username: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=32,
+        pattern=r"^[a-z0-9][a-z0-9_]{2,31}$",
+    )
     display_name: str | None = Field(default=None, max_length=64)
     bio: str | None = Field(default=None, max_length=160)
 
 
 class DirectChatRequest(BaseModel):
     login: str = Field(min_length=1, max_length=64)
+
+
+class ChatPeer(BaseModel):
+    id: int
+    login: str
+    username: str
+    display_name: str | None
+    avatar_url: str | None
 
 
 class ChatResponse(BaseModel):
@@ -81,6 +97,7 @@ class ChatResponse(BaseModel):
     member_roles: dict[str, str]
     avatar_url: str | None
     history_visibility: str
+    peer: ChatPeer | None = None
     last_message: "ChatLastMessage | None" = None
     unread_count: int = 0
 

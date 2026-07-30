@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from sqlalchemy import and_, exists, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user, get_db
@@ -30,7 +31,22 @@ async def update_profile(
         current_user.bio = (
             request_body.bio.strip() if request_body.bio else None
         ) or None
-    await session.commit()
+    if "username" in request_body.model_fields_set:
+        username = request_body.username.strip().lower()
+        owner_id = await session.scalar(
+            select(User.id).where(
+                User.username == username,
+                User.id != current_user.id,
+            )
+        )
+        if owner_id is not None:
+            raise HTTPException(status_code=409, detail="Username is already taken")
+        current_user.username = username
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Username is already taken") from exc
     await session.refresh(current_user)
     return current_user
 
@@ -73,7 +89,7 @@ async def search_users(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
-    normalized_query = q.strip()
+    normalized_query = q.strip().removeprefix("@").lower()
     if len(normalized_query) < 2:
         return []
     escaped_query = (
@@ -89,9 +105,12 @@ async def search_users(
                 User.is_active.is_(True),
                 User.is_placeholder.is_(False),
                 ~_block_exists(current_user.id),
-                User.login.ilike(f"%{escaped_query}%", escape="\\"),
+                or_(
+                    User.username.ilike(f"%{escaped_query}%", escape="\\"),
+                    User.display_name.ilike(f"%{escaped_query}%", escape="\\"),
+                ),
             )
-            .order_by(User.login.asc(), User.id.asc())
+            .order_by(User.username.asc(), User.id.asc())
             .limit(20)
         )
     )
@@ -111,7 +130,7 @@ async def list_users(
                 User.is_placeholder.is_(False),
                 ~_block_exists(current_user.id),
             )
-            .order_by(User.login)
+            .order_by(User.username)
         )
     ).all()
     return users

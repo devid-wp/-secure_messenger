@@ -64,6 +64,17 @@ async def serialize_chat_summary(
             None,
         )
         result["avatar_url"] = peer.avatar_url if peer is not None else None
+        result["peer"] = (
+            {
+                "id": peer.id,
+                "login": peer.login,
+                "username": peer.username,
+                "display_name": peer.display_name,
+                "avatar_url": peer.avatar_url,
+            }
+            if peer is not None
+            else None
+        )
     result["unread_count"] = unread_count or 0
     result["last_message"] = (
         {

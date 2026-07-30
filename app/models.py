@@ -38,7 +38,12 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("login", name="uq_users_login"),
+        UniqueConstraint("username", name="uq_users_username"),
         CheckConstraint("length(trim(login)) > 0", name="login_not_blank"),
+        CheckConstraint(
+            "length(username) BETWEEN 3 AND 32",
+            name="username_format",
+        ),
         CheckConstraint(
             "NOT is_placeholder OR NOT is_active",
             name="placeholder_inactive",
@@ -47,6 +52,7 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     login: Mapped[str] = mapped_column(String(64), nullable=False)
+    username: Mapped[str] = mapped_column(String(32), nullable=False)
     display_name: Mapped[Optional[str]] = mapped_column(String(64))
     bio: Mapped[Optional[str]] = mapped_column(String(160))
     avatar_url: Mapped[Optional[str]] = mapped_column(String(2048))
