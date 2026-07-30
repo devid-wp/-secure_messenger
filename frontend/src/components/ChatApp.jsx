@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useTheme } from '../ThemeContext'
 import {
   Avatar,
   ChatHeader,
@@ -243,7 +242,6 @@ async function cropSticker(file, zoom) {
 }
 
 function ChatApp({ token, login, onLogout }) {
-  const { theme, toggle } = useTheme()
   const [chats, setChats] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
@@ -1442,7 +1440,6 @@ function ChatApp({ token, login, onLogout }) {
               <button role="menuitem" type="button" onClick={() => { setGroupDialogOpen(true); setMainMenuOpen(false) }}>New group</button>
               <button role="menuitem" type="button" onClick={() => { openProfile(); setMainMenuOpen(false) }}>My profile</button>
               <button role="menuitem" type="button" onClick={openStickerManager}>Sticker packs</button>
-              <button role="menuitem" type="button" onClick={toggle}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
               <button role="menuitem" type="button" className="danger-action" onClick={handleLogout}>Sign out</button>
             </div>
           )}
