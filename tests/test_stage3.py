@@ -277,6 +277,62 @@ class DirectMessagesApiTests(unittest.TestCase):
         ).json()
         self.assertEqual(history["items"][0]["status"], "read")
 
+    def test_chat_list_includes_last_message_and_persistent_unread_count(self) -> None:
+        alice_token = self.register_and_login("alice")
+        bob_token = self.register_and_login("bob")
+        chat = self.client.post(
+            "/api/v1/chats/dm",
+            json={"login": "bob"},
+            headers=self.headers(alice_token),
+        ).json()
+
+        with self.client.websocket_connect(
+            "/api/v1/realtime/ws",
+            subprotocols=[f"bearer.{alice_token}"],
+        ) as alice:
+            alice.send_json(
+                {
+                    "type": "send_message",
+                    "chat_id": chat["id"],
+                    "text": "sidebar preview",
+                    "client_id": str(uuid4()),
+                }
+            )
+            sent = alice.receive_json()
+
+        bob_chat = self.client.get(
+            "/api/v1/chats/dm",
+            headers=self.headers(bob_token),
+        ).json()[0]
+        self.assertEqual(bob_chat["unread_count"], 1)
+        self.assertEqual(bob_chat["last_message"]["content"], "sidebar preview")
+        self.assertEqual(bob_chat["last_message"]["sender"], "alice")
+
+        with (
+            self.client.websocket_connect(
+                "/api/v1/realtime/ws",
+                subprotocols=[f"bearer.{alice_token}"],
+            ) as alice,
+            self.client.websocket_connect(
+                "/api/v1/realtime/ws",
+                subprotocols=[f"bearer.{bob_token}"],
+            ) as bob,
+        ):
+            bob.send_json(
+                {
+                    "type": "read",
+                    "chat_id": chat["id"],
+                    "server_seq": sent["server_seq"],
+                }
+            )
+            self.assertEqual(alice.receive_json()["status"], "read")
+
+        refreshed = self.client.get(
+            "/api/v1/chats/dm",
+            headers=self.headers(bob_token),
+        ).json()[0]
+        self.assertEqual(refreshed["unread_count"], 0)
+
     def test_message_can_reply_to_message_in_same_chat(self) -> None:
         alice_token = self.register_and_login("alice")
         self.register_and_login("bob")
