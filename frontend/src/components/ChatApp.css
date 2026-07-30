@@ -1393,6 +1393,11 @@
   max-height: min(850px, calc(100vh - 36px));
 }
 
+.modal-card:has(.member-picker) {
+  width: min(520px, 100%);
+  max-height: min(720px, calc(100vh - 36px));
+}
+
 .sticker-manager {
   display: flex;
   overflow-y: auto;
@@ -1718,7 +1723,11 @@
 }
 
 .member-picker {
-  min-width: min(480px, 76vw);
+  min-width: 0;
+  gap: 12px;
+  overflow-y: auto;
+  max-height: calc(100vh - 108px);
+  padding-top: 12px;
 }
 
 .member-picker__intro {
@@ -1726,7 +1735,7 @@
   display: grid;
   gap: 5px;
   overflow: hidden;
-  padding: 14px 16px 14px 18px;
+  padding: 13px 15px;
   border: 1px solid var(--accent-border);
   border-radius: var(--radius-md);
   background: linear-gradient(110deg, rgba(109, 74, 255, 0.14), transparent 58%), var(--bg-panel);
@@ -1764,7 +1773,7 @@
 
 .member-picker__list {
   display: grid;
-  max-height: 310px;
+  max-height: 258px;
   gap: 6px;
   overflow-y: auto;
 }
@@ -1773,8 +1782,9 @@
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  min-width: 0;
+  gap: 10px;
+  padding: 9px 10px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-input);
@@ -1783,7 +1793,7 @@
 }
 
 .member-choice:hover {
-  transform: translateX(3px);
+  transform: translateY(-1px);
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
 }
@@ -1817,14 +1827,19 @@
 }
 
 .member-choice i {
+  padding: 5px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
   color: var(--text-muted);
-  font-size: 8px;
+  font-size: 7px;
   font-style: normal;
   font-weight: 750;
   letter-spacing: 0.11em;
 }
 
 .member-choice.is-selected i {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
   color: #ad9fff;
 }
 
@@ -1849,6 +1864,36 @@
 
 .member-picker__manual {
   font-size: 10px !important;
+}
+
+.member-picker__manual input {
+  padding-block: 9px !important;
+}
+
+@media (max-width: 560px) {
+  .modal-backdrop {
+    align-items: end;
+    padding: 10px;
+  }
+
+  .modal-card:has(.member-picker) {
+    width: 100%;
+    max-height: calc(100vh - 20px);
+    border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-sm);
+  }
+
+  .member-picker {
+    max-height: calc(100vh - 88px);
+    padding-inline: 14px;
+  }
+
+  .member-choice {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .member-choice i {
+    display: none;
+  }
 }
 
 .username-field {

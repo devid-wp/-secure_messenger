@@ -1995,7 +1995,7 @@ function ChatApp({ token, login, onLogout }) {
                       <strong>{person.display_name || person.username}</strong>
                       <small>@{person.username}{person.id ? ` · ID #${person.id}` : ''}</small>
                     </span>
-                    <i>{selected ? 'SELECTED' : 'SELECT'}</i>
+                    <i>{selected ? '✓ Selected' : 'Choose'}</i>
                   </button>
                 )
               })}
