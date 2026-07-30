@@ -75,7 +75,7 @@ export function SearchInput({ value, onChange, loading = false }) {
         type="search"
         value={value}
         onChange={onChange}
-        placeholder="Search people"
+        placeholder="Search @username or name"
         aria-label="Search users"
       />
       {loading && <span className="search-spinner" aria-label="Searching" />}
@@ -107,8 +107,8 @@ function previewTime(timestamp) {
 }
 
 export function ContactListItem({ conversation, active, onSelect }) {
-  const subtitle = conversation.userLogin
-    ? 'Start a private conversation'
+  const subtitle = conversation.isSearchResult
+    ? `@${conversation.username} · ID #${conversation.stableUserId}`
     : previewMessage(conversation.lastMessage)
       || (conversation.type === 'group'
         ? memberCountLabel(conversation.memberCount)
@@ -156,7 +156,9 @@ export function ConnectionStatus({ connected }) {
 export function ChatHeader({ conversation, connected, onBack, onMenu }) {
   const conversationDetails = conversation?.type === 'group'
     ? `${memberCountLabel(conversation.memberCount)} · ${connected ? 'online' : 'reconnecting'}`
-    : 'Private conversation'
+    : conversation?.username
+      ? `@${conversation.username} · ID #${conversation.stableUserId}`
+      : 'Private conversation'
 
   return (
     <header className="chat-header">

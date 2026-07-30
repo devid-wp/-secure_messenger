@@ -175,6 +175,40 @@
   padding: 7px 9px 14px;
 }
 
+.signal-index {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px 7px 10px;
+  color: var(--text-muted);
+}
+
+.signal-index span {
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.16em;
+}
+
+.signal-index strong {
+  position: relative;
+  min-width: 28px;
+  color: #a99aff;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.signal-index strong::before {
+  position: absolute;
+  top: 50%;
+  right: 24px;
+  width: 24px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent-primary));
+  content: '';
+}
+
 .contact-item {
   position: relative;
   display: grid;
@@ -1666,10 +1700,64 @@
   opacity: 0.64;
 }
 
-.profile-login {
+.username-field {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+}
+
+.username-field:focus-within {
+  border-color: rgba(125, 92, 255, 0.46);
+  box-shadow: 0 0 0 3px rgba(109, 74, 255, 0.09);
+}
+
+.username-field span {
+  padding-left: 13px;
+  color: #a99aff;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-weight: 700;
+}
+
+.username-field input {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.field-hint {
   color: var(--text-muted);
-  font-size: var(--font-size-xs);
-  text-align: center;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.profile-identity {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 12px;
+  padding: 11px 13px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(110deg, rgba(109, 74, 255, 0.1), transparent);
+}
+
+.profile-identity span {
+  color: var(--text-muted);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.15em;
+}
+
+.profile-identity strong {
+  grid-row: span 2;
+  color: #b5a7ff;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.profile-identity small {
+  color: var(--text-secondary);
+  font-size: 10px;
 }
 
 @keyframes message-enter {

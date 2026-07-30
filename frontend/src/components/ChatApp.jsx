@@ -258,7 +258,7 @@ function ChatApp({ token, login, onLogout }) {
   const [error, setError] = useState('')
   const [wsReady, setWsReady] = useState(false)
   const [historyRefresh, setHistoryRefresh] = useState(0)
-  const [profile, setProfile] = useState({ login, display_name: '', bio: '', avatar_url: null })
+  const [profile, setProfile] = useState({ id: null, login, username: login.toLowerCase(), display_name: '', bio: '', avatar_url: null })
   const [profileOpen, setProfileOpen] = useState(false)
   const [profileAvatar, setProfileAvatar] = useState(null)
   const [profileAvatarPreview, setProfileAvatarPreview] = useState(null)
@@ -334,6 +334,7 @@ function ChatApp({ token, login, onLogout }) {
     const existingDmUsers = new Set()
     const normalizedQuery = searchQuery.trim().toLowerCase()
     const existingChats = chats.map((chat) => {
+      const peer = chat.type === 'dm' ? chat.peer : null
       if (chat.type === 'dm') {
         const otherLogin = chat.members.find((member) => member !== login)
         if (otherLogin) existingDmUsers.add(otherLogin)
@@ -341,8 +342,11 @@ function ChatApp({ token, login, onLogout }) {
       return {
         key: `chat-${chat.id}`,
         chatId: chat.id,
-        label: chatTitle(chat, login),
-        userLogin: null,
+        label: peer?.display_name || peer?.username || chatTitle(chat, login),
+        username: peer?.username || null,
+        stableUserId: peer?.id || null,
+        userLogin: peer?.login || null,
+        isSearchResult: false,
         avatarUrl: chat.avatar_url,
         type: chat.type,
         memberRoles: chat.member_roles,
@@ -359,8 +363,11 @@ function ChatApp({ token, login, onLogout }) {
       .map((user) => ({
         key: `user-${user.login}`,
         chatId: null,
-        label: user.login,
+        label: user.display_name || user.username,
+        username: user.username,
+        stableUserId: user.id,
         userLogin: user.login,
+        isSearchResult: true,
         avatarUrl: user.avatar_url,
         type: 'dm',
         memberRoles: null,
@@ -370,7 +377,7 @@ function ChatApp({ token, login, onLogout }) {
         unreadCount: 0,
       }))
     return [...existingChats, ...newDirectChats].sort((left, right) => {
-      if (left.userLogin || right.userLogin) return left.userLogin ? -1 : 1
+      if (left.isSearchResult || right.isSearchResult) return left.isSearchResult ? -1 : 1
       const leftTime = left.lastMessage?.timestamp || ''
       const rightTime = right.lastMessage?.timestamp || ''
       return rightTime.localeCompare(leftTime)
@@ -836,7 +843,7 @@ function ChatApp({ token, login, onLogout }) {
   }
 
   const blockSelectedUser = async () => {
-    const otherLogin = selectedConversation?.label
+    const otherLogin = selectedConversation?.userLogin
     if (!otherLogin || !window.confirm(`Block ${otherLogin}?`)) return
     const response = await fetch(
       `${API_URL}/api/v1/users/${encodeURIComponent(otherLogin)}/block`,
@@ -1010,12 +1017,14 @@ function ChatApp({ token, login, onLogout }) {
         method: 'PATCH',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          username: profile.username.trim().toLowerCase().replace(/^@/, ''),
           display_name: profile.display_name || null,
           bio: profile.bio || null,
         }),
       })
       if (!response.ok) {
-        setProfileFormError('The profile could not be saved. Please try again.')
+        const body = await response.json().catch(() => null)
+        setProfileFormError(body?.detail || 'The profile could not be saved. Please try again.')
         return
       }
       const updatedProfile = await response.json()
@@ -1447,6 +1456,12 @@ function ChatApp({ token, login, onLogout }) {
 
         <div className="user-search"><SearchInput value={searchQuery} onChange={handleSearchChange} loading={searchLoading} /></div>
         <nav className="channel-list">
+          {!workspaceLoading && conversations.length > 0 && (
+            <div className="signal-index">
+              <span>{searchQuery.trim() ? 'IDENTITY MATCHES' : 'SIGNAL INDEX'}</span>
+              <strong>{conversations.length.toString().padStart(2, '0')}</strong>
+            </div>
+          )}
           {workspaceLoading && <ConversationSkeleton />}
           {!workspaceLoading && conversations.length === 0 && (
             <div className="sidebar-empty">
@@ -1485,7 +1500,7 @@ function ChatApp({ token, login, onLogout }) {
           <Avatar name={profile.display_name || login} size={42} src={profile.avatar_url} />
           <div className="user-bar__info">
             <div className="user-bar__name">{profile.display_name || login}</div>
-            <div className="user-bar__status">@{login}</div>
+            <div className="user-bar__status">@{profile.username || login}</div>
           </div>
           <Icon name="more" size={17} />
         </button>
@@ -1721,9 +1736,30 @@ function ChatApp({ token, login, onLogout }) {
               {profileAvatar && <small className="photo-picker__file">{profileAvatar.name}</small>}
               <input name="avatar" type="file" accept="image/jpeg,image/png,image/webp" onChange={selectProfileAvatar} />
             </label>
+            <label>Public username
+              <div className="username-field">
+                <span>@</span>
+                <input
+                  value={profile.username || ''}
+                  minLength={3}
+                  maxLength={32}
+                  pattern="[a-z0-9][a-z0-9_]{2,31}"
+                  required
+                  onChange={(event) => setProfile((value) => ({
+                    ...value,
+                    username: event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''),
+                  }))}
+                />
+              </div>
+              <small className="field-hint">Unique and changeable. Your permanent account ID stays the same.</small>
+            </label>
             <label>Display name<input value={profile.display_name || ''} maxLength={64} onChange={(event) => setProfile((value) => ({ ...value, display_name: event.target.value }))} /></label>
             <label>Bio<textarea value={profile.bio || ''} maxLength={160} rows={3} onChange={(event) => setProfile((value) => ({ ...value, bio: event.target.value }))} placeholder="A few words about you" /></label>
-            <div className="profile-login">@{login}</div>
+            <div className="profile-identity">
+              <span>PERMANENT ID</span>
+              <strong>#{profile.id || '—'}</strong>
+              <small>Sign-in login: {login}</small>
+            </div>
             {profileFormError && <p className="profile-form-error" role="alert">{profileFormError}</p>}
             <button className="primary-button" type="submit" disabled={profileSaving}>
               {profileSaving ? 'Saving…' : 'Save changes'}
