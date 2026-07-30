@@ -249,8 +249,9 @@ try {
         "--host", "127.0.0.1", "--port", "8000"
     ) -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $backendLog -RedirectStandardError $backendErrorLog
-    $frontend = Start-Process -FilePath $nodeTools.Npm -ArgumentList @(
-        "run", "dev", "--", "--host", "127.0.0.1"
+    $viteEntry = Join-Path $frontendPath "node_modules\vite\bin\vite.js"
+    $frontend = Start-Process -FilePath $nodeTools.Node -ArgumentList @(
+        $viteEntry, "--host", "127.0.0.1"
     ) -WorkingDirectory $frontendPath -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $frontendLog -RedirectStandardError $frontendErrorLog
 
