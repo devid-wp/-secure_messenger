@@ -15,8 +15,6 @@ class TokenResponse(BaseModel):
     token: str
     device_id: str
     device_status: str = "active"
-    pairing_code: str | None = None
-    pairing_uri: str | None = None
 
 
 class DeviceResponse(BaseModel):
@@ -34,11 +32,6 @@ class DeviceResponse(BaseModel):
     approved_at: datetime | None = None
     pairing_expires_at: datetime | None = None
     history_policy: str
-
-
-class DeviceApprovalRequest(BaseModel):
-    pairing_code: str = Field(min_length=8, max_length=128)
-    history_policy: Literal["new_only", "transfer_requested"] = "new_only"
 
 
 class SecurityEventResponse(BaseModel):

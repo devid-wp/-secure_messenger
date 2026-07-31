@@ -1,7 +1,5 @@
-from datetime import datetime, timedelta, timezone
-from hashlib import sha256
+from datetime import datetime, timezone
 import re
-import secrets
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -12,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import AuthError, register_user, verify_password
 from app.dependencies import get_bearer_token, get_current_device, get_db
 from app.models import ChatMember, Device, SecurityEvent, User
-from app.schemas import Credentials, DeviceApprovalRequest, DeviceResponse, TokenResponse
+from app.schemas import Credentials, DeviceResponse, TokenResponse
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -110,37 +108,21 @@ async def login(
         user.password_hash = replacement_hash.encode()
         user.password_salt = b""
     now = datetime.now(timezone.utc)
-    stale_pending = list(await session.scalars(select(Device).where(
-        Device.user_id == user.id,
-        Device.status == "pending",
-        Device.pairing_expires_at < now,
-    )))
-    for stale in stale_pending:
-        stale.status = "revoked"
-        stale.revoked_at = now
     device_count = await session.scalar(select(func.count(Device.id)).where(
-        Device.user_id == user.id,
-        Device.status.in_(("active", "pending")),
-    ))
-    if (device_count or 0) >= MAX_ACTIVE_DEVICES:
-        await session.rollback()
-        raise HTTPException(status_code=409, detail="Device limit reached (maximum 5)")
-    active_count = await session.scalar(select(func.count(Device.id)).where(
         Device.user_id == user.id,
         Device.status == "active",
         Device.revoked_at.is_(None),
     ))
-    status = "active" if not active_count else "pending"
-    pairing_code = secrets.token_urlsafe(24) if status == "pending" else None
+    if (device_count or 0) >= MAX_ACTIVE_DEVICES:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Device limit reached (maximum 5)")
     device_id = str(uuid4())
     device = Device(
         id=device_id,
         user_id=user.id,
         name=request_body.device_name.strip(),
-        status=status,
-        approved_at=now if status == "active" else None,
-        pairing_code_hash=sha256(pairing_code.encode()).hexdigest() if pairing_code else None,
-        pairing_expires_at=now + timedelta(minutes=10) if pairing_code else None,
+        status="active",
+        approved_at=now,
     )
     session.add(device)
     await session.commit()
@@ -148,9 +130,7 @@ async def login(
     return TokenResponse(
         token=token,
         device_id=device.id,
-        device_status=status,
-        pairing_code=pairing_code,
-        pairing_uri=(f"secure-messenger://pair?device={device.id}&code={pairing_code}" if pairing_code else None),
+        device_status="active",
     )
 
 
@@ -176,51 +156,6 @@ async def devices(
         )
     )
     return [_device_response(device, current_device.id) for device in rows]
-
-
-@router.post("/devices/{device_id}/approve", response_model=DeviceResponse)
-async def approve_device(
-    device_id: str,
-    request_body: DeviceApprovalRequest,
-    request: Request,
-    current_device: Device = Depends(get_current_device),
-    session: AsyncSession = Depends(get_db),
-):
-    if current_device.status != "active":
-        raise HTTPException(status_code=403, detail="A trusted device must approve this request")
-    target = await session.get(Device, device_id)
-    if target is None or target.user_id != current_device.user_id:
-        raise HTTPException(status_code=404, detail="Device not found")
-    if target.status != "pending" or target.revoked_at is not None:
-        raise HTTPException(status_code=409, detail="Device is not awaiting approval")
-    now = datetime.now(timezone.utc)
-    supplied_hash = sha256(request_body.pairing_code.encode()).hexdigest()
-    pairing_expires_at = target.pairing_expires_at
-    if pairing_expires_at is not None and pairing_expires_at.tzinfo is None:
-        pairing_expires_at = pairing_expires_at.replace(tzinfo=timezone.utc)
-    if pairing_expires_at is None or pairing_expires_at < now:
-        raise HTTPException(status_code=410, detail="Pairing request expired")
-    if not secrets.compare_digest(target.pairing_code_hash or "", supplied_hash):
-        raise HTTPException(status_code=403, detail="Invalid pairing code")
-    target.status = "active"
-    target.approved_by_device_id = current_device.id
-    target.approved_at = now
-    target.history_policy = request_body.history_policy
-    target.pairing_code_hash = None
-    await session.commit()
-    await session.refresh(target)
-    await request.app.state.connection_manager.broadcast(
-        {current_device.user_id},
-        {
-            "type": "security_event",
-            "event": "device_approved",
-            "device_id": target.id,
-            "device_name": target.name,
-            "history_policy": target.history_policy,
-            "mls_action": "add_commit_required",
-        },
-    )
-    return _device_response(target, current_device.id)
 
 
 @router.delete("/devices/{device_id}", status_code=204)

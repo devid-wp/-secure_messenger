@@ -339,10 +339,9 @@ class VersionedApiSmokeTests(unittest.TestCase):
             401,
         )
 
-    def test_new_device_requires_trusted_approval_and_limit_is_five(self) -> None:
-        trusted_token = self._register_and_login("multi-device")
-        trusted_headers = {"Authorization": f"Bearer {trusted_token}"}
-        pending_login = self.client.post(
+    def test_password_login_activates_device_and_limit_is_five(self) -> None:
+        self._register_and_login("multi-device")
+        new_login = self.client.post(
             "/api/v1/auth/login",
             json={
                 "login": "multi-device",
@@ -350,28 +349,12 @@ class VersionedApiSmokeTests(unittest.TestCase):
                 "device_name": "New laptop",
             },
         )
-        self.assertEqual(pending_login.status_code, 200, pending_login.text)
-        pending_data = pending_login.json()
-        self.assertEqual(pending_data["device_status"], "pending")
-        self.assertTrue(pending_data["pairing_uri"].startswith("secure-messenger://pair"))
-        pending_headers = {"Authorization": f"Bearer {pending_data['token']}"}
+        self.assertEqual(new_login.status_code, 200, new_login.text)
+        device_data = new_login.json()
+        self.assertEqual(device_data["device_status"], "active")
+        device_headers = {"Authorization": f"Bearer {device_data['token']}"}
         self.assertEqual(
-            self.client.get("/api/v1/users", headers=pending_headers).status_code,
-            403,
-        )
-
-        approved = self.client.post(
-            f"/api/v1/auth/devices/{pending_data['device_id']}/approve",
-            headers=trusted_headers,
-            json={
-                "pairing_code": pending_data["pairing_code"],
-                "history_policy": "new_only",
-            },
-        )
-        self.assertEqual(approved.status_code, 200, approved.text)
-        self.assertEqual(approved.json()["status"], "active")
-        self.assertEqual(
-            self.client.get("/api/v1/users", headers=pending_headers).status_code,
+            self.client.get("/api/v1/users", headers=device_headers).status_code,
             200,
         )
 
@@ -381,7 +364,7 @@ class VersionedApiSmokeTests(unittest.TestCase):
                 json={
                     "login": "multi-device",
                     "password": "password-123",
-                    "device_name": f"Pending {number}",
+                    "device_name": f"Extra device {number}",
                 },
             )
             self.assertEqual(extra.status_code, 200, extra.text)
