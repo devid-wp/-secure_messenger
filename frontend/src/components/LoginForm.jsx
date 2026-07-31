@@ -4,7 +4,7 @@ import './LoginForm.css'
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 function localDeviceName() {
-  const platform = navigator.userAgentData?.platform || navigator.platform || 'Unknown OS'
+  const platform = navigator.platform || 'Unknown OS'
   const browser = navigator.userAgent.includes('Firefox') ? 'Firefox' : navigator.userAgent.includes('Edg/') ? 'Edge' : navigator.userAgent.includes('Chrome') ? 'Chrome' : 'Browser'
   return `${browser} on ${platform}`.slice(0, 128)
 }
