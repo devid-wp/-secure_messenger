@@ -98,6 +98,11 @@ class Device(Base):
     __tablename__ = "devices"
     __table_args__ = (
         CheckConstraint("length(trim(name)) BETWEEN 1 AND 128", name="name_length"),
+        CheckConstraint("status IN ('pending', 'active', 'revoked')", name="status"),
+        CheckConstraint(
+            "history_policy IN ('new_only', 'transfer_requested')",
+            name="history_policy",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -112,6 +117,16 @@ class Device(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    approved_by_device_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("devices.id", ondelete="SET NULL")
+    )
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    pairing_code_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    pairing_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    history_policy: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="new_only"
+    )
     identity_key: Mapped[Optional[bytes]] = mapped_column(LargeBinary)
     identity_fingerprint: Mapped[Optional[str]] = mapped_column(
         String(64),
@@ -166,6 +181,25 @@ class MlsKeyPackage(Base):
     claimed_by_device: Mapped[Optional[Device]] = relationship(
         foreign_keys=[claimed_by_device_id]
     )
+
+
+class SecurityEvent(Base):
+    __tablename__ = "security_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    recipient_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    device_id: Mapped[Optional[str]] = mapped_column(String(36))
+    fingerprint: Mapped[Optional[str]] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class UserBlock(Base):

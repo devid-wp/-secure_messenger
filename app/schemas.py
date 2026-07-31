@@ -14,6 +14,9 @@ class TokenResponse(BaseModel):
     status: str = "ok"
     token: str
     device_id: str
+    device_status: str = "active"
+    pairing_code: str | None = None
+    pairing_uri: str | None = None
 
 
 class DeviceResponse(BaseModel):
@@ -24,6 +27,29 @@ class DeviceResponse(BaseModel):
     created_at: datetime
     last_seen_at: datetime
     revoked_at: datetime | None
+    status: str
+    current: bool = False
+    fingerprint: str | None = None
+    approved_by_device_id: str | None = None
+    approved_at: datetime | None = None
+    pairing_expires_at: datetime | None = None
+    history_policy: str
+
+
+class DeviceApprovalRequest(BaseModel):
+    pairing_code: str = Field(min_length=8, max_length=128)
+    history_policy: Literal["new_only", "transfer_requested"] = "new_only"
+
+
+class SecurityEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    event_type: str
+    subject_user_id: int
+    device_id: str | None
+    fingerprint: str | None
+    created_at: datetime
 
 
 class DeviceIdentityPublish(BaseModel):

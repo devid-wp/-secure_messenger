@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.models import (
     Chat,
     ChatMember,
+    Device,
     MediaObject,
     Message,
     MessageReceipt,
@@ -54,16 +55,24 @@ async def websocket_endpoint(websocket: WebSocket):
         return
     async with websocket.app.state.session_factory() as session:
         user = await session.get(User, session_data.user_id)
-        if user is None or not user.is_active or user.is_placeholder:
+        device = await session.get(Device, session_data.device_id)
+        if (
+            user is None or not user.is_active or user.is_placeholder
+            or device is None or device.status != "active" or device.revoked_at is not None
+        ):
             await websocket.close(code=4001, reason="Invalid token")
             return
 
     manager = websocket.app.state.connection_manager
     user_id = session_data.user_id
-    await manager.connect(token, user_id, websocket, bearer_protocol)
+    await manager.connect(token, user_id, session_data.device_id, websocket, bearer_protocol)
     try:
         while True:
             raw = await websocket.receive_text()
+            live_session = await session_store.resolve(token)
+            if live_session is None:
+                await websocket.close(code=4003, reason="Session revoked")
+                return
             try:
                 payload = json.loads(raw)
                 event_type = payload.get("type", "send_message")

@@ -5,8 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.dependencies import get_current_user, get_db
-from app.models import Chat, ChatMember, Message, Sticker, User
+from app.dependencies import get_active_device, get_current_user, get_db
+from app.models import Chat, ChatMember, Device, Message, Sticker, User
 from app.schemas import MessageEditRequest, MessagePage, MessageResponse
 from app.services.cursors import (
     InvalidCursor,
@@ -35,6 +35,7 @@ async def list_messages(
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None, max_length=512),
     current_user: User = Depends(get_current_user),
+    current_device: Device = Depends(get_active_device),
     session: AsyncSession = Depends(get_db),
 ):
     membership = await session.get(ChatMember, (chat_id, current_user.id))
@@ -48,6 +49,11 @@ async def list_messages(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     statement = select(Message).where(Message.chat_id == chat_id)
+    if (
+        current_device.approved_by_device_id is not None
+        and current_device.approved_at is not None
+    ):
+        statement = statement.where(Message.timestamp >= current_device.approved_at)
     chat = await session.get(Chat, chat_id)
     if (
         chat is not None

@@ -31,7 +31,9 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Invalid token")
     device = await session.get(Device, session_data.device_id)
     user = await session.get(User, session_data.user_id)
-    if device is None or device.revoked_at is not None:
+    if device is not None and device.status == "pending" and device.revoked_at is None:
+        raise HTTPException(status_code=403, detail="Device approval required")
+    if device is None or device.revoked_at is not None or device.status != "active":
         await request.app.state.session_store.revoke(token)
         raise HTTPException(status_code=401, detail="Invalid token")
     if user is None or not user.is_active or user.is_placeholder:
@@ -58,10 +60,22 @@ async def get_current_device(
     if (
         device is None
         or device.revoked_at is not None
+        or device.status == "revoked"
         or user is None
         or not user.is_active
         or user.is_placeholder
     ):
         await request.app.state.session_store.revoke(token)
         raise HTTPException(status_code=401, detail="Invalid token")
+    return device
+
+
+async def get_active_device(
+    request: Request,
+    token: str = Depends(get_bearer_token),
+    session: AsyncSession = Depends(get_db),
+) -> Device:
+    device = await get_current_device(request, token, session)
+    if device.status != "active":
+        raise HTTPException(status_code=403, detail="Device approval required")
     return device
