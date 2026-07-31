@@ -3,6 +3,12 @@ import './LoginForm.css'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
+function localDeviceName() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || 'Unknown OS'
+  const browser = navigator.userAgent.includes('Firefox') ? 'Firefox' : navigator.userAgent.includes('Edg/') ? 'Edge' : navigator.userAgent.includes('Chrome') ? 'Chrome' : 'Browser'
+  return `${browser} on ${platform}`.slice(0, 128)
+}
+
 function LoginForm({ onLogin }) {
   const [mode, setMode] = useState('login')
   const [login, setLogin] = useState('')
@@ -38,7 +44,7 @@ function LoginForm({ onLogin }) {
       const response = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ login, password }),
+        body: JSON.stringify({ login, password, device_name: localDeviceName() }),
       })
 
       const data = await response.json()
@@ -54,7 +60,7 @@ function LoginForm({ onLogin }) {
         setMode('login')
         setNotice('Account created. Sign in with your new password.')
       } else if (data.token) {
-        onLogin(data.token, login)
+        onLogin(data.token, login, data)
       } else {
         setError('Invalid credentials')
       }

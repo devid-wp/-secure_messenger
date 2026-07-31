@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import QrScanner from 'qr-scanner'
 import {
   Avatar,
   ChatHeader,
@@ -255,12 +256,20 @@ function ChatApp({ token, login, onLogout }) {
   const [replyingTo, setReplyingTo] = useState(null)
   const [invitations, setInvitations] = useState([])
   const [blockedUsers, setBlockedUsers] = useState([])
+  const [securityEvents, setSecurityEvents] = useState([])
   const [inputText, setInputText] = useState('')
   const [error, setError] = useState('')
   const [wsReady, setWsReady] = useState(false)
   const [historyRefresh, setHistoryRefresh] = useState(0)
   const [profile, setProfile] = useState({ id: null, login, username: login.toLowerCase(), display_name: '', bio: '', avatar_url: null })
   const [profileOpen, setProfileOpen] = useState(false)
+  const [devicesOpen, setDevicesOpen] = useState(false)
+  const [devices, setDevices] = useState([])
+  const [devicePairingInput, setDevicePairingInput] = useState('')
+  const [approvalDeviceId, setApprovalDeviceId] = useState('')
+  const [deviceHistoryPolicy, setDeviceHistoryPolicy] = useState('new_only')
+  const [deviceBusy, setDeviceBusy] = useState(false)
+  const [deviceScannerOpen, setDeviceScannerOpen] = useState(false)
   const [profileAvatar, setProfileAvatar] = useState(null)
   const [profileAvatarPreview, setProfileAvatarPreview] = useState(null)
   const [profileFormError, setProfileFormError] = useState('')
@@ -305,6 +314,7 @@ function ChatApp({ token, login, onLogout }) {
   const readReceiptsRef = useRef(new Set())
   const profileAvatarPreviewRef = useRef(null)
   const stickerPreviewRef = useRef(null)
+  const deviceScannerVideoRef = useRef(null)
 
   const authHeaders = useMemo(
     () => ({ Authorization: `Bearer ${token}` }),
@@ -319,6 +329,23 @@ function ChatApp({ token, login, onLogout }) {
       URL.revokeObjectURL(stickerPreviewRef.current)
     }
   }, [])
+
+  useEffect(() => {
+    if (!deviceScannerOpen || !deviceScannerVideoRef.current) return undefined
+    const scanner = new QrScanner(
+      deviceScannerVideoRef.current,
+      (result) => {
+        setDevicePairingInput(result.data)
+        setDeviceScannerOpen(false)
+      },
+      { returnDetailedScanResult: true, highlightScanRegion: true }
+    )
+    scanner.start().catch(() => {
+      setError('Camera access failed. Paste the pairing link or code instead.')
+      setDeviceScannerOpen(false)
+    })
+    return () => scanner.destroy()
+  }, [deviceScannerOpen])
 
   useEffect(() => {
     const closeFloatingPanels = (event) => {
@@ -442,7 +469,7 @@ function ChatApp({ token, login, onLogout }) {
 
     const loadWorkspace = async () => {
       try {
-        const [dmResponse, groupsResponse, invitationsResponse, profileResponse, blocksResponse] = await Promise.all([
+        const [dmResponse, groupsResponse, invitationsResponse, profileResponse, blocksResponse, securityResponse] = await Promise.all([
           fetch(`${API_URL}/api/v1/chats/dm`, { headers: authHeaders }),
           fetch(`${API_URL}/api/v1/chats/groups`, { headers: authHeaders }),
           fetch(`${API_URL}/api/v1/chats/groups/invitations/pending`, {
@@ -450,12 +477,13 @@ function ChatApp({ token, login, onLogout }) {
           }),
           fetch(`${API_URL}/api/v1/users/me`, { headers: authHeaders }),
           fetch(`${API_URL}/api/v1/users/blocks`, { headers: authHeaders }),
+          fetch(`${API_URL}/api/v1/e2ee/security-events`, { headers: authHeaders }),
         ])
         if (dmResponse.status === 401) {
           onLogout()
           return
         }
-        if (!dmResponse.ok || !groupsResponse.ok || !invitationsResponse.ok || !profileResponse.ok || !blocksResponse.ok) {
+        if (!dmResponse.ok || !groupsResponse.ok || !invitationsResponse.ok || !profileResponse.ok || !blocksResponse.ok || !securityResponse.ok) {
           throw new Error('Could not load conversations')
         }
 
@@ -466,11 +494,13 @@ function ChatApp({ token, login, onLogout }) {
         const invitationData = await invitationsResponse.json()
         const profileData = await profileResponse.json()
         const blockedPeople = await blocksResponse.json()
+        const securityData = await securityResponse.json()
         if (cancelled) return
         setChats(chatData)
         setInvitations(invitationData)
         setProfile(profileData)
         setBlockedUsers(blockedPeople)
+        setSecurityEvents(securityData)
         setSelectedChatId((currentId) => {
           if (chatData.some((chat) => chat.id === currentId)) return currentId
           return chatData[0]?.id ?? null
@@ -620,11 +650,15 @@ function ChatApp({ token, login, onLogout }) {
         setHistoryRefresh((value) => value + 1)
       }
 
-      ws.onclose = () => {
+      ws.onclose = (closeEvent) => {
         if (wsRef.current === ws) wsRef.current = null
         setWsReady(false)
         for (const pending of outboxRef.current) {
           updateMessageStatus(pending.client_id, 'failed')
+        }
+        if (closeEvent.code === 4003) {
+          onLogout()
+          return
         }
         if (!stopped) {
           const delay = Math.min(1000 * (2 ** reconnectAttempt), 30000)
@@ -643,6 +677,16 @@ function ChatApp({ token, login, onLogout }) {
           const data = JSON.parse(event.data)
           if (data.type === 'error') {
             setError(data.detail || 'Message was not sent')
+            return
+          }
+          if (data.type === 'security_event') {
+            if (data.event === 'device_revoked') {
+              setError(`Security alert: ${data.device_name} was revoked. MLS removal is required before encrypted sending resumes.`)
+            } else if (data.event === 'device_approved') {
+              setError(`New device approved: ${data.device_name}. Its MLS add commit is pending.`)
+            } else if (data.event === 'fingerprint_changed') {
+              setError('Security warning: a contact device fingerprint changed. Verify the safety code before continuing.')
+            }
             return
           }
           if (data.type === 'message_ack') {
@@ -737,7 +781,7 @@ function ChatApp({ token, login, onLogout }) {
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [login, token])
+  }, [login, onLogout, token])
 
   useEffect(() => {
     const ws = wsRef.current
@@ -1036,6 +1080,95 @@ function ChatApp({ token, login, onLogout }) {
     clearProfileAvatar()
     setProfileFormError('')
     setProfileOpen(false)
+  }
+
+  const refreshDevices = async () => {
+    const response = await fetch(`${API_URL}/api/v1/auth/devices`, { headers: authHeaders })
+    if (!response.ok) throw new Error('Could not load devices')
+    const rows = await response.json()
+    setDevices(rows)
+    return rows
+  }
+
+  const openDevices = async () => {
+    setMainMenuOpen(false)
+    setDevicesOpen(true)
+    setDevicePairingInput('')
+    setApprovalDeviceId('')
+    try {
+      await refreshDevices()
+    } catch (deviceError) {
+      setError(deviceError.message)
+    }
+  }
+
+  const approvePendingDevice = async (event) => {
+    event.preventDefault()
+    if (deviceBusy || !devicePairingInput.trim()) return
+    let deviceId = approvalDeviceId
+    let pairingCode = devicePairingInput.trim()
+    const deviceMatch = pairingCode.match(/[?&]device=([^&]+)/)
+    const codeMatch = pairingCode.match(/[?&]code=([^&]+)/)
+    if (deviceMatch && codeMatch) {
+      deviceId = decodeURIComponent(deviceMatch[1])
+      pairingCode = decodeURIComponent(codeMatch[1])
+    }
+    if (!deviceId) {
+      const pending = devices.filter((device) => device.status === 'pending')
+      if (pending.length === 1) deviceId = pending[0].id
+    }
+    if (!deviceId) {
+      setError('Select a pending device or paste its complete QR pairing link')
+      return
+    }
+    setDeviceBusy(true)
+    try {
+      const response = await fetch(`${API_URL}/api/v1/auth/devices/${deviceId}/approve`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pairing_code: pairingCode, history_policy: deviceHistoryPolicy }),
+      })
+      const body = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(body?.detail || 'Device approval failed')
+      await refreshDevices()
+      setDevicePairingInput('')
+      setApprovalDeviceId('')
+      setError('Device approved. MLS add commit is now required for every encrypted chat.')
+    } catch (approvalError) {
+      setError(approvalError.message)
+    } finally {
+      setDeviceBusy(false)
+    }
+  }
+
+  const revokeTrustedDevice = async (device) => {
+    if (device.status === 'revoked' || !window.confirm(`Revoke ${device.name}?`)) return
+    setDeviceBusy(true)
+    try {
+      const response = await fetch(`${API_URL}/api/v1/auth/devices/${device.id}`, {
+        method: 'DELETE', headers: authHeaders,
+      })
+      if (!response.ok) throw new Error('Could not revoke device')
+      if (device.current) {
+        onLogout()
+        return
+      }
+      await refreshDevices()
+      setError('Device revoked immediately. MLS remove commit is required before encrypted sending resumes.')
+    } catch (revokeError) {
+      setError(revokeError.message)
+    } finally {
+      setDeviceBusy(false)
+    }
+  }
+
+  const acknowledgeSecurityEvent = async (eventId) => {
+    const response = await fetch(`${API_URL}/api/v1/e2ee/security-events/${eventId}/acknowledge`, {
+      method: 'POST', headers: authHeaders,
+    })
+    if (response.ok) {
+      setSecurityEvents((previous) => previous.filter((event) => event.id !== eventId))
+    }
   }
 
   const selectProfileAvatar = (event) => {
@@ -1513,6 +1646,7 @@ function ChatApp({ token, login, onLogout }) {
             <div className="main-menu" role="menu">
               <button role="menuitem" type="button" onClick={() => { setGroupDialogOpen(true); setMainMenuOpen(false) }}>New group</button>
               <button role="menuitem" type="button" onClick={() => { openProfile(); setMainMenuOpen(false) }}>My profile</button>
+              <button role="menuitem" type="button" onClick={openDevices}>Devices</button>
               <button role="menuitem" type="button" onClick={openStickerManager}>Sticker packs</button>
               <button role="menuitem" type="button" className="danger-action" onClick={handleLogout}>Sign out</button>
             </div>
@@ -1611,6 +1745,16 @@ function ChatApp({ token, login, onLogout }) {
         </div>
 
         <div className="messages-list" key={selectedChatId ?? 'empty'}>
+          {securityEvents.map((securityEvent) => (
+            <div className="security-warning" role="alert" key={securityEvent.id}>
+              <Icon name="shield" />
+              <span>
+                <strong>Contact safety fingerprint changed</strong>
+                <small>Device {securityEvent.device_id?.slice(0, 8) || 'unknown'} · verify the safety code before trusting new messages.</small>
+              </span>
+              <button type="button" onClick={() => acknowledgeSecurityEvent(securityEvent.id)}>Reviewed</button>
+            </div>
+          ))}
           {!wsReady && <div className="offline-banner">Connection interrupted. Queued messages will retry automatically.</div>}
           {error && <p className="error-message" role="alert">{error}<button type="button" onClick={() => setError('')} aria-label="Dismiss error">×</button></p>}
           {nextCursor && (
@@ -1834,6 +1978,61 @@ function ChatApp({ token, login, onLogout }) {
               {profileSaving ? 'Saving…' : 'Save changes'}
             </button>
           </form>
+        </Modal>
+      )}
+
+      {devicesOpen && (
+        <Modal title="Trusted devices" onClose={() => setDevicesOpen(false)}>
+          <div className="devices-panel">
+            <header className="devices-panel__summary">
+              <span>DEVICE TRUST</span>
+              <strong>{devices.filter((device) => device.status !== 'revoked').length} / 5 slots used</strong>
+              <p>Every active device has its own identity and MLS leaf.</p>
+            </header>
+            <div className="device-list">
+              {devices.map((device) => (
+                <article className={`device-row device-row--${device.status}`} key={device.id}>
+                  <span className="device-glyph"><Icon name="shield" size={19} /></span>
+                  <div>
+                    <strong>{device.name}{device.current ? ' · This device' : ''}</strong>
+                    <small>{device.status.toUpperCase()} · {device.fingerprint ? `FP ${device.fingerprint.slice(0, 12)}…` : 'Identity not published'}</small>
+                    <small>History: {device.history_policy === 'new_only' ? 'new messages only' : 'encrypted transfer requested'}</small>
+                  </div>
+                  {device.status === 'pending' ? (
+                    <button type="button" onClick={() => setApprovalDeviceId(device.id)}>Select</button>
+                  ) : device.status === 'active' ? (
+                    <button type="button" className="danger-action" disabled={deviceBusy} onClick={() => revokeTrustedDevice(device)}>Revoke</button>
+                  ) : <i>Revoked</i>}
+                </article>
+              ))}
+            </div>
+            {devices.some((device) => device.status === 'pending') && (
+              <form className="device-approval-form" onSubmit={approvePendingDevice}>
+                {deviceScannerOpen && <video className="device-qr-video" ref={deviceScannerVideoRef} muted playsInline />}
+                <button className="device-scan-button" type="button" onClick={() => setDeviceScannerOpen((value) => !value)}>
+                  {deviceScannerOpen ? 'Stop camera' : 'Scan pairing QR'}
+                </button>
+                <label>Pairing QR link or code
+                  <input
+                    value={devicePairingInput}
+                    onChange={(event) => setDevicePairingInput(event.target.value)}
+                    placeholder="Paste scanned secure-messenger:// link"
+                    required
+                  />
+                </label>
+                <label>History on the new device
+                  <select value={deviceHistoryPolicy} onChange={(event) => setDeviceHistoryPolicy(event.target.value)}>
+                    <option value="new_only">New messages only (recommended)</option>
+                    <option value="transfer_requested">Request encrypted device transfer</option>
+                  </select>
+                </label>
+                <button className="primary-button" type="submit" disabled={deviceBusy || !devicePairingInput.trim()}>
+                  {deviceBusy ? 'Approving…' : approvalDeviceId ? 'Approve selected device' : 'Approve paired device'}
+                </button>
+              </form>
+            )}
+            <p className="devices-panel__notice">Revocation closes HTTP sessions and WebSockets immediately. Cryptographic removal completes only after clients apply the MLS Remove Commit.</p>
+          </div>
         </Modal>
       )}
 
