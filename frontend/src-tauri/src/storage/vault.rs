@@ -5,6 +5,46 @@ use super::dpapi;
 use super::key::MASTER_KEY_BYTES;
 use super::{MasterKey, StorageError, StoragePaths};
 
+const ENVELOPE_MAGIC: &[u8; 8] = b"SMVAULT\0";
+const ENVELOPE_VERSION: u8 = 1;
+const HEADER_BYTES: usize = ENVELOPE_MAGIC.len() + 1 + size_of::<u32>();
+
+fn encode_envelope(protected: &[u8]) -> Result<Vec<u8>, StorageError> {
+    let length = u32::try_from(protected.len())
+        .map_err(|_| StorageError::InvalidData("protected master key is too large"))?;
+    let mut envelope = Vec::with_capacity(HEADER_BYTES + protected.len());
+    envelope.extend_from_slice(ENVELOPE_MAGIC);
+    envelope.push(ENVELOPE_VERSION);
+    envelope.extend_from_slice(&length.to_le_bytes());
+    envelope.extend_from_slice(protected);
+    Ok(envelope)
+}
+
+fn decode_envelope(envelope: &[u8]) -> Result<&[u8], StorageError> {
+    if envelope.len() < HEADER_BYTES || &envelope[..ENVELOPE_MAGIC.len()] != ENVELOPE_MAGIC {
+        return Err(StorageError::InvalidData(
+            "master key envelope header is invalid",
+        ));
+    }
+    if envelope[ENVELOPE_MAGIC.len()] != ENVELOPE_VERSION {
+        return Err(StorageError::InvalidData(
+            "master key envelope version is unsupported",
+        ));
+    }
+    let length_offset = ENVELOPE_MAGIC.len() + 1;
+    let protected_length = u32::from_le_bytes(
+        envelope[length_offset..HEADER_BYTES]
+            .try_into()
+            .expect("header length is fixed"),
+    ) as usize;
+    if envelope.len() != HEADER_BYTES + protected_length {
+        return Err(StorageError::InvalidData(
+            "master key envelope length is invalid",
+        ));
+    }
+    Ok(&envelope[HEADER_BYTES..])
+}
+
 pub struct MasterKeyStore {
     paths: StoragePaths,
 }
@@ -26,8 +66,8 @@ impl MasterKeyStore {
     }
 
     fn load(&self) -> Result<MasterKey, StorageError> {
-        let protected = fs::read(self.paths.master_key())?;
-        let plaintext = dpapi::unprotect(&protected)?;
+        let envelope = fs::read(self.paths.master_key())?;
+        let plaintext = dpapi::unprotect(decode_envelope(&envelope)?)?;
         let bytes: [u8; MASTER_KEY_BYTES] = plaintext
             .try_into()
             .map_err(|_| StorageError::InvalidData("master key length is invalid"))?;
@@ -37,11 +77,12 @@ impl MasterKeyStore {
     fn create(&self) -> Result<MasterKey, StorageError> {
         let key = MasterKey::generate()?;
         let protected = dpapi::protect(key.expose())?;
+        let envelope = encode_envelope(&protected)?;
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(self.paths.master_key())?;
-        file.write_all(&protected)?;
+        file.write_all(&envelope)?;
         file.sync_all()?;
         Ok(key)
     }
@@ -74,5 +115,16 @@ mod tests {
             .windows(MASTER_KEY_BYTES)
             .any(|part| part == first.expose()));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corrupt_and_future_envelopes_are_rejected_before_dpapi() {
+        assert!(decode_envelope(b"not-a-vault").is_err());
+        let mut envelope = encode_envelope(b"protected").unwrap();
+        envelope[ENVELOPE_MAGIC.len()] = ENVELOPE_VERSION + 1;
+        assert!(decode_envelope(&envelope).is_err());
+        envelope[ENVELOPE_MAGIC.len()] = ENVELOPE_VERSION;
+        envelope.pop();
+        assert!(decode_envelope(&envelope).is_err());
     }
 }
