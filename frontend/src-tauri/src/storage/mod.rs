@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 
 pub mod dpapi;
 mod key;
+mod state;
 mod vault;
 
 pub(crate) use key::MasterKey;
+pub(crate) use state::NativeVault;
 pub(crate) use vault::MasterKeyStore;
 
 #[derive(Debug)]
