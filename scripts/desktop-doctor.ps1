@@ -73,11 +73,37 @@ function Find-WebView2Runtime {
     return $null
 }
 
+function Find-PythonRuntime {
+    $python = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($python) {
+        return $python.Source
+    }
+    foreach ($registryRoot in @(
+        "HKCU:\Software\Python\PythonCore",
+        "HKLM:\Software\Python\PythonCore",
+        "HKLM:\Software\WOW6432Node\Python\PythonCore"
+    )) {
+        $executable = Get-ChildItem $registryRoot -ErrorAction SilentlyContinue |
+            Sort-Object PSChildName -Descending |
+            ForEach-Object {
+                (Get-ItemProperty (Join-Path $_.PSPath "InstallPath") `
+                    -ErrorAction SilentlyContinue).ExecutablePath
+            } |
+            Where-Object { $_ -and (Test-Path -LiteralPath $_) } |
+            Select-Object -First 1
+        if ($executable) {
+            return $executable
+        }
+    }
+    return $null
+}
+
 $rustc = Get-Command rustc.exe -ErrorAction SilentlyContinue
 $cargo = Get-Command cargo.exe -ErrorAction SilentlyContinue
 $rustup = Get-Command rustup.exe -ErrorAction SilentlyContinue
 $node = Get-Command node.exe -ErrorAction SilentlyContinue
 $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+$python = Find-PythonRuntime
 
 Add-DesktopCheck "Rust compiler" ($null -ne $rustc) $(
     if ($rustc) { (& $rustc.Source --version) } else { "Install Rust stable with rustup" }
@@ -93,6 +119,9 @@ Add-DesktopCheck "Node.js" ($null -ne $node) $(
 )
 Add-DesktopCheck "npm" ($null -ne $npm) $(
     if ($npm) { (& $npm.Source --version) } else { "npm.cmd was not found" }
+)
+Add-DesktopCheck "Python" ($null -ne $python) $(
+    if ($python) { (& $python --version) } else { "Install Python 3.12 or newer" }
 )
 
 $visualStudioPath = Find-VisualStudioInstallation
