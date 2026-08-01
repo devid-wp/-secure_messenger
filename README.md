@@ -83,6 +83,13 @@ The launcher loads the MSVC developer environment, starts FastAPI when port
 written under `.run`. The launcher stops only the backend process that it
 started itself.
 
+Verify the live desktop backend path, including registration, login, direct
+chat creation, WebSocket delivery, acknowledgement, and message persistence:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-desktop-integration.ps1
+```
+
 ## Docker start
 
 Install Docker Desktop, open PowerShell in the repository root, and run:

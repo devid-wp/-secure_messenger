@@ -47,6 +47,21 @@ function Import-VisualStudioEnvironment {
     }
 }
 
+function Normalize-ProcessPath {
+    $currentPath = [System.Environment]::GetEnvironmentVariable(
+        "Path", [System.EnvironmentVariableTarget]::Process
+    )
+    [System.Environment]::SetEnvironmentVariable(
+        "PATH", $null, [System.EnvironmentVariableTarget]::Process
+    )
+    [System.Environment]::SetEnvironmentVariable(
+        "Path", $null, [System.EnvironmentVariableTarget]::Process
+    )
+    [System.Environment]::SetEnvironmentVariable(
+        "Path", $currentPath, [System.EnvironmentVariableTarget]::Process
+    )
+}
+
 function Test-BackendReady {
     try {
         Invoke-WebRequest -Uri "http://127.0.0.1:8000/" `
@@ -69,6 +84,7 @@ function Stop-ProcessTree {
 }
 
 Import-VisualStudioEnvironment
+Normalize-ProcessPath
 
 $backendProcess = $null
 try {
@@ -85,7 +101,7 @@ try {
             -RedirectStandardError (Join-Path $runtimeRoot "desktop-backend-error.log")
 
         $backendReady = $false
-        for ($attempt = 0; $attempt -lt 60; $attempt++) {
+        for ($attempt = 0; $attempt -lt 360; $attempt++) {
             if (Test-BackendReady) {
                 $backendReady = $true
                 break
@@ -96,7 +112,12 @@ try {
             Start-Sleep -Milliseconds 500
         }
         if (-not $backendReady) {
-            throw "FastAPI did not start. Check .run/desktop-backend-error.log."
+            $errorLog = Join-Path $runtimeRoot "desktop-backend-error.log"
+            if (Test-Path -LiteralPath $errorLog) {
+                Write-Host "Last backend errors:" -ForegroundColor Red
+                Get-Content -Tail 30 $errorLog | Write-Host -ForegroundColor Red
+            }
+            throw "FastAPI did not become ready within 180 seconds. Check .run/desktop-backend-error.log."
         }
     }
 
