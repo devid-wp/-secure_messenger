@@ -84,6 +84,10 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    sessions: Mapped[list["RefreshSession"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     sticker_packs: Mapped[list["StickerPack"]] = relationship(
         back_populates="owner",
         cascade="all, delete-orphan",
@@ -138,11 +142,39 @@ class Device(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="devices")
+    sessions: Mapped[list["RefreshSession"]] = relationship(
+        back_populates="device",
+        cascade="all, delete-orphan",
+    )
     key_packages: Mapped[list["MlsKeyPackage"]] = relationship(
         back_populates="device",
         foreign_keys="MlsKeyPackage.device_id",
         cascade="all, delete-orphan",
     )
+
+
+class RefreshSession(Base):
+    __tablename__ = "refresh_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    device_id: Mapped[str] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    refresh_token_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
+    device_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship(back_populates="sessions")
+    device: Mapped[Device] = relationship(back_populates="sessions")
 
 
 class MlsKeyPackage(Base):

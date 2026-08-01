@@ -8,13 +8,24 @@ class Credentials(BaseModel):
     login: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=1024)
     device_name: str = Field(default="Web browser", min_length=1, max_length=128)
+    client_type: Literal["web", "desktop"] = "web"
 
 
 class TokenResponse(BaseModel):
     status: str = "ok"
     token: str
+    access_token: str
+    refresh_token: str | None = None
+    token_type: str = "bearer"
+    expires_in: int
+    login: str
     device_id: str
     device_status: str = "active"
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str | None = Field(default=None, min_length=32, max_length=512)
+    client_type: Literal["web", "desktop"] = "web"
 
 
 class DeviceResponse(BaseModel):

@@ -25,7 +25,8 @@ class Settings:
     )
     sql_echo: bool = False
     redis_url: str | None = None
-    session_ttl_seconds: int = 2_592_000
+    session_ttl_seconds: int = 900
+    refresh_ttl_seconds: int = 2_592_000
     rate_limit_requests: int = 120
     rate_limit_window_seconds: int = 60
     upload_dir: Path = DEFAULT_UPLOAD_DIR
@@ -56,7 +57,8 @@ class Settings:
             cors_origins=origins,
             sql_echo=sql_echo,
             redis_url=os.environ.get("REDIS_URL") or None,
-            session_ttl_seconds=int(os.environ.get("SESSION_TTL_SECONDS", "2592000")),
+            session_ttl_seconds=int(os.environ.get("SESSION_TTL_SECONDS", "900")),
+            refresh_ttl_seconds=int(os.environ.get("REFRESH_TTL_SECONDS", "2592000")),
             rate_limit_requests=int(os.environ.get("RATE_LIMIT_REQUESTS", "120")),
             rate_limit_window_seconds=int(
                 os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60")
@@ -90,6 +92,8 @@ class Settings:
             raise RuntimeError("APP_ENV=production requires REDIS_URL")
         if self.session_ttl_seconds < 300:
             raise RuntimeError("SESSION_TTL_SECONDS must be at least 300")
+        if self.refresh_ttl_seconds < self.session_ttl_seconds:
+            raise RuntimeError("REFRESH_TTL_SECONDS must not be shorter than access sessions")
         if self.media_storage_backend not in {"local", "s3"}:
             raise RuntimeError("MEDIA_STORAGE_BACKEND must be local or s3")
         if self.media_storage_backend == "s3" and not all(
