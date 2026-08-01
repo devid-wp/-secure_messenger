@@ -1,5 +1,6 @@
 use std::fmt;
 use std::io;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub enum StorageError {
@@ -30,6 +31,32 @@ impl From<io::Error> for StorageError {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct StoragePaths {
+    root: PathBuf,
+}
+
+impl StoragePaths {
+    pub fn new(app_data_dir: &Path) -> Result<Self, StorageError> {
+        if !app_data_dir.is_absolute() {
+            return Err(StorageError::InvalidData(
+                "application data directory must be absolute",
+            ));
+        }
+        Ok(Self {
+            root: app_data_dir.join("secure-vault"),
+        })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn master_key(&self) -> PathBuf {
+        self.root.join("master-key.dpapi")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40,5 +67,22 @@ mod tests {
         assert!(StorageError::InvalidData("bad envelope")
             .to_string()
             .contains("bad envelope"));
+    }
+
+    #[test]
+    fn storage_paths_stay_below_absolute_app_data_directory() {
+        let base = if cfg!(windows) {
+            PathBuf::from(r"C:\Users\tester\AppData\Roaming\SecureMessenger")
+        } else {
+            PathBuf::from("/tmp/secure-messenger")
+        };
+        let paths = StoragePaths::new(&base).unwrap();
+        assert!(paths.root().starts_with(&base));
+        assert!(paths.master_key().starts_with(paths.root()));
+    }
+
+    #[test]
+    fn relative_storage_directory_is_rejected() {
+        assert!(StoragePaths::new(Path::new("relative")).is_err());
     }
 }
