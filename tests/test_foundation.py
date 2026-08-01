@@ -122,7 +122,7 @@ class FoundationMigrationTests(unittest.TestCase):
                 connection.execute(
                     "SELECT version_num FROM alembic_version"
                 ).fetchone()[0],
-                "20260731_17",
+                "20260801_18",
             )
             self.assertEqual(
                 connection.execute("PRAGMA foreign_key_check").fetchall(),
@@ -286,6 +286,38 @@ class VersionedApiSmokeTests(unittest.TestCase):
         paths = self.client.get("/openapi.json").json()["paths"]
         self.assertIn("/api/v1/auth/login", paths)
         self.assertNotIn("/login", paths)
+
+    def test_refresh_cookie_rotates_and_logout_revokes_session(self) -> None:
+        registration = self.client.post(
+            "/api/v1/auth/register",
+            json={"login": "refresh-user", "password": "password-123"},
+        )
+        self.assertEqual(registration.status_code, 201, registration.text)
+        login = self.client.post(
+            "/api/v1/auth/login",
+            json={"login": "refresh-user", "password": "password-123"},
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+        self.assertIsNone(login.json()["refresh_token"])
+        cookie = login.headers["set-cookie"].lower()
+        self.assertIn("httponly", cookie)
+        self.assertIn("samesite=lax", cookie)
+
+        first_access = login.json()["access_token"]
+        refreshed = self.client.post("/api/v1/auth/refresh", json={})
+        self.assertEqual(refreshed.status_code, 200, refreshed.text)
+        self.assertNotEqual(refreshed.json()["access_token"], first_access)
+
+        logout = self.client.post(
+            "/api/v1/auth/logout",
+            headers={"Authorization": f"Bearer {refreshed.json()['access_token']}"},
+            json={},
+        )
+        self.assertEqual(logout.status_code, 204, logout.text)
+        self.assertEqual(
+            self.client.post("/api/v1/auth/refresh", json={}).status_code,
+            401,
+        )
 
     def test_profile_can_be_customized_with_uploaded_avatar(self) -> None:
         token = self._register_and_login("profile-user")
