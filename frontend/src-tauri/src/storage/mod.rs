@@ -3,6 +3,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub mod dpapi;
+mod key;
+
+pub(crate) use key::MasterKey;
 
 #[derive(Debug)]
 pub enum StorageError {
