@@ -2,6 +2,8 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub mod dpapi;
+
 #[derive(Debug)]
 pub enum StorageError {
     Io(io::Error),
