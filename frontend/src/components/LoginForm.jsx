@@ -60,7 +60,7 @@ function LoginForm({ onLogin }) {
         setMode('login')
         setNotice('Account created. Sign in with your new password.')
       } else if (data.token) {
-        onLogin(data.token, login, data)
+        await onLogin(data.token, login, data)
       } else {
         setError('Invalid credentials')
       }
