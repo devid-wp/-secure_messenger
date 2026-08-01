@@ -13,9 +13,10 @@ pub struct DesktopState {
 
 impl DesktopState {
     pub fn new(app_data_dir: &Path) -> Result<Self, StorageError> {
+        let paths = StoragePaths::new(app_data_dir)?;
         Ok(Self {
-            vault: NativeVault::new(StoragePaths::new(app_data_dir)?),
-            sessions: NativeSessionStore::default(),
+            vault: NativeVault::new(paths.clone()),
+            sessions: NativeSessionStore::new(paths)?,
         })
     }
 
@@ -34,7 +35,7 @@ pub struct VaultStatus {
 
 #[derive(Serialize, Zeroize, ZeroizeOnDrop)]
 pub struct SessionSnapshot {
-    token: String,
+    refresh_token: String,
     login: String,
 }
 
@@ -53,13 +54,13 @@ pub fn vault_status(state: State<'_, DesktopState>) -> Result<VaultStatus, Strin
 #[tauri::command]
 pub fn session_set(
     state: State<'_, DesktopState>,
-    token: String,
+    refresh_token: String,
     login: String,
 ) -> Result<(), String> {
     state.vault.unlock().map_err(command_error)?;
     state
         .sessions
-        .replace(NativeSession::new(token, login).map_err(command_error)?)
+        .replace(NativeSession::new(refresh_token, login).map_err(command_error)?)
         .map_err(command_error)
 }
 
@@ -70,7 +71,7 @@ pub fn session_current(state: State<'_, DesktopState>) -> Result<Option<SessionS
         .current()
         .map_err(command_error)?
         .map(|session| SessionSnapshot {
-            token: session.token().to_owned(),
+            refresh_token: session.refresh_token().to_owned(),
             login: session.login().to_owned(),
         }))
 }

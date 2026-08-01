@@ -65,6 +65,10 @@ impl StoragePaths {
     pub fn master_key(&self) -> PathBuf {
         self.root.join("master-key.dpapi")
     }
+
+    pub fn session(&self) -> PathBuf {
+        self.root.join("session.dpapi")
+    }
 }
 
 #[cfg(test)]
@@ -88,6 +92,7 @@ mod tests {
         let paths = StoragePaths::new(&base).unwrap();
         assert!(paths.root().starts_with(&base));
         assert!(paths.master_key().starts_with(paths.root()));
+        assert!(paths.session().starts_with(paths.root()));
     }
 
     #[test]

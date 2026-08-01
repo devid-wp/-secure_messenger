@@ -25,9 +25,9 @@ export async function getVaultStatus() {
   return invokeDesktop('vault_status')
 }
 
-export async function saveNativeSession(token, login) {
+export async function saveNativeSession(refreshToken, login) {
   if (!isDesktopRuntime()) return false
-  await invokeDesktop('session_set', { token, login })
+  await invokeDesktop('session_set', { refreshToken, login })
   return true
 }
 

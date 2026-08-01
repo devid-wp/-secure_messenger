@@ -11,24 +11,45 @@ import './App.css'
 
 function App() {
   const desktop = isDesktopRuntime()
-  const [token, setToken] = useState(() => desktop ? null : localStorage.getItem('token'))
-  const [login, setLogin] = useState(() => desktop ? null : localStorage.getItem('login'))
-  const [sessionReady, setSessionReady] = useState(!desktop)
+  const [token, setToken] = useState(null)
+  const [login, setLogin] = useState(null)
+  const [refreshToken, setRefreshToken] = useState(null)
+  const [accessExpiresAt, setAccessExpiresAt] = useState(null)
+  const [sessionReady, setSessionReady] = useState(false)
 
   useEffect(() => {
-    if (!desktop) return
     let cancelled = false
     localStorage.removeItem('token')
     localStorage.removeItem('login')
-    readNativeSession()
-      .then((session) => {
-        if (!cancelled && session) {
-          setToken(session.token)
-          setLogin(session.login)
+    const restore = async () => {
+      const nativeSession = desktop ? await readNativeSession() : null
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL ?? 'http://localhost:8000'}/api/v1/auth/refresh`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_type: desktop ? 'desktop' : 'web',
+            refresh_token: nativeSession?.refreshToken ?? null,
+          }),
         }
-      })
-      .catch(() => {
-        // Keep the desktop signed out when native storage cannot be read.
+      )
+      if (!response.ok) throw new Error('Session is unavailable')
+      const data = await response.json()
+      if (!cancelled) {
+        setToken(data.access_token)
+        setLogin(data.login)
+        setAccessExpiresAt(Date.now() + data.expires_in * 1000)
+        if (desktop && data.refresh_token) {
+          setRefreshToken(data.refresh_token)
+          await saveNativeSession(data.refresh_token, data.login)
+        }
+      }
+    }
+    restore()
+      .catch(async () => {
+        if (desktop) await clearNativeSession().catch(() => {})
       })
       .finally(() => {
         if (!cancelled) setSessionReady(true)
@@ -38,15 +59,50 @@ function App() {
     }
   }, [desktop])
 
-  const handleLogin = async (newToken, newLogin) => {
+  useEffect(() => {
+    if (!token || !accessExpiresAt) return
+    const delay = Math.max(1000, accessExpiresAt - Date.now() - 60_000)
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(
+          `${import.meta.env.VITE_API_URL ?? 'http://localhost:8000'}/api/v1/auth/refresh`,
+          {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client_type: desktop ? 'desktop' : 'web',
+              refresh_token: desktop ? refreshToken : null,
+            }),
+          }
+        )
+        if (!response.ok) throw new Error('Session expired')
+        const data = await response.json()
+        setToken(data.access_token)
+        setAccessExpiresAt(Date.now() + data.expires_in * 1000)
+        if (desktop && data.refresh_token) {
+          setRefreshToken(data.refresh_token)
+          await saveNativeSession(data.refresh_token, data.login)
+        }
+      } catch {
+        setToken(null)
+        setLogin(null)
+        setRefreshToken(null)
+        setAccessExpiresAt(null)
+        if (desktop) await clearNativeSession().catch(() => {})
+      }
+    }, delay)
+    return () => window.clearTimeout(timer)
+  }, [accessExpiresAt, desktop, refreshToken, token])
+
+  const handleLogin = async (newToken, newLogin, data) => {
     if (desktop) {
-      await saveNativeSession(newToken, newLogin)
-    } else {
-      localStorage.setItem('token', newToken)
-      localStorage.setItem('login', newLogin)
+      await saveNativeSession(data.refresh_token, newLogin)
+      setRefreshToken(data.refresh_token)
     }
     setToken(newToken)
     setLogin(newLogin)
+    setAccessExpiresAt(Date.now() + data.expires_in * 1000)
   }
 
   const handleLogout = async () => {
@@ -57,7 +113,15 @@ function App() {
           `${import.meta.env.VITE_API_URL ?? 'http://localhost:8000'}/api/v1/auth/logout`,
           {
             method: 'POST',
-            headers: { Authorization: `Bearer ${currentToken}` },
+            credentials: 'include',
+            headers: {
+              Authorization: `Bearer ${currentToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              client_type: desktop ? 'desktop' : 'web',
+              refresh_token: desktop ? refreshToken : null,
+            }),
           }
         )
       } catch {
@@ -74,6 +138,8 @@ function App() {
     } finally {
       setToken(null)
       setLogin(null)
+      setRefreshToken(null)
+      setAccessExpiresAt(null)
     }
   }
 

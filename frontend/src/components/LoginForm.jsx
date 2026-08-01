@@ -43,8 +43,14 @@ function LoginForm({ onLogin }) {
     try {
       const response = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ login, password, device_name: localDeviceName() }),
+        body: JSON.stringify({
+          login,
+          password,
+          device_name: localDeviceName(),
+          client_type: '__TAURI_INTERNALS__' in window ? 'desktop' : 'web',
+        }),
       })
 
       const data = await response.json()
@@ -59,8 +65,8 @@ function LoginForm({ onLogin }) {
         setPasswordConfirmation('')
         setMode('login')
         setNotice('Account created. Sign in with your new password.')
-      } else if (data.token) {
-        await onLogin(data.token, login, data)
+      } else if (data.access_token) {
+        await onLogin(data.access_token, data.login, data)
       } else {
         setError('Invalid credentials')
       }
