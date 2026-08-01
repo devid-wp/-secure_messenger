@@ -90,6 +90,12 @@ chat creation, WebSocket delivery, acknowledgement, and message persistence:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-desktop-integration.ps1
 ```
 
+After `npm run desktop:build`, verify the generated executable and NSIS bundle:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-desktop-artifacts.ps1
+```
+
 ## Docker start
 
 Install Docker Desktop, open PowerShell in the repository root, and run:
