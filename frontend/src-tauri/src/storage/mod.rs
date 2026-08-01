@@ -4,8 +4,10 @@ use std::path::{Path, PathBuf};
 
 pub mod dpapi;
 mod key;
+mod vault;
 
 pub(crate) use key::MasterKey;
+pub(crate) use vault::MasterKeyStore;
 
 #[derive(Debug)]
 pub enum StorageError {
