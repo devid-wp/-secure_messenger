@@ -53,6 +53,36 @@ http://localhost:5173
 Keep the launcher terminal open. Press `Ctrl+C` to stop both servers. Startup
 logs are stored in `.run` when troubleshooting is needed.
 
+## Windows desktop client
+
+The Tauri desktop shell reuses the React interface and connects to the same
+FastAPI service. It is an early native shell and does **not** provide E2EE yet.
+
+Install these prerequisites first:
+
+- Rust stable through rustup;
+- Node.js 20 or newer;
+- Microsoft Visual Studio 2022 Build Tools with **Desktop development with
+  C++**, MSVC, and a Windows 10/11 SDK;
+- Microsoft Edge WebView2 Evergreen Runtime.
+
+Run the prerequisite diagnostics without starting anything:
+
+```powershell
+.\scripts\desktop-doctor.ps1
+```
+
+Start the desktop application from the repository root:
+
+```powershell
+.\start-desktop.bat
+```
+
+The launcher loads the MSVC developer environment, starts FastAPI when port
+8000 is not already available, and then runs `tauri dev`. Desktop logs are
+written under `.run`. The launcher stops only the backend process that it
+started itself.
+
 ## Docker start
 
 Install Docker Desktop, open PowerShell in the repository root, and run:
