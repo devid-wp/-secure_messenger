@@ -2,6 +2,7 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub mod commands;
 pub mod dpapi;
 mod key;
 mod session;
