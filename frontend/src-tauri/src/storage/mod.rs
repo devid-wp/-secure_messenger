@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 
 pub mod dpapi;
 mod key;
+mod session;
 mod state;
 mod vault;
 
 pub(crate) use key::MasterKey;
+pub(crate) use session::{NativeSession, NativeSessionStore};
 pub(crate) use state::NativeVault;
 pub(crate) use vault::MasterKeyStore;
 
