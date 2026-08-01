@@ -11,6 +11,17 @@ pub fn run() {
             app.manage(storage::commands::DesktopState::new(&app_data_dir)?);
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                if window
+                    .state::<storage::commands::DesktopState>()
+                    .lock()
+                    .is_err()
+                {
+                    eprintln!("failed to lock native storage during window close");
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             crypto::crypto_status,
             storage::commands::vault_status,

@@ -19,7 +19,6 @@ pub enum StorageError {
     Io(io::Error),
     Platform(String),
     InvalidData(&'static str),
-    Locked,
 }
 
 impl fmt::Display for StorageError {
@@ -30,7 +29,6 @@ impl fmt::Display for StorageError {
             Self::InvalidData(message) => {
                 write!(formatter, "native storage data is invalid: {message}")
             }
-            Self::Locked => formatter.write_str("native storage is locked"),
         }
     }
 }
@@ -75,7 +73,6 @@ mod tests {
 
     #[test]
     fn errors_do_not_include_secret_values() {
-        assert_eq!(StorageError::Locked.to_string(), "native storage is locked");
         assert!(StorageError::InvalidData("bad envelope")
             .to_string()
             .contains("bad envelope"));

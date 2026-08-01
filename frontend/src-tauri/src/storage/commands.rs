@@ -18,6 +18,11 @@ impl DesktopState {
             sessions: NativeSessionStore::default(),
         })
     }
+
+    pub fn lock(&self) -> Result<(), StorageError> {
+        self.sessions.clear()?;
+        self.vault.lock()
+    }
 }
 
 #[derive(Serialize)]
@@ -72,6 +77,31 @@ pub fn session_current(state: State<'_, DesktopState>) -> Result<Option<SessionS
 
 #[tauri::command]
 pub fn session_clear(state: State<'_, DesktopState>) -> Result<(), String> {
-    state.sessions.clear().map_err(command_error)?;
-    state.vault.lock().map_err(command_error)
+    state.lock().map_err(command_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    #[test]
+    fn locking_desktop_state_clears_session_and_master_key() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("secure-messenger-app-state-{suffix}"));
+        let state = DesktopState::new(&root).unwrap();
+        state.vault.unlock().unwrap();
+        state
+            .sessions
+            .replace(NativeSession::new("token".into(), "alice".into()).unwrap())
+            .unwrap();
+        state.lock().unwrap();
+        assert!(!state.vault.is_unlocked().unwrap());
+        assert!(state.sessions.current().unwrap().is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
