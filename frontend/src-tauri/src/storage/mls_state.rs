@@ -6,7 +6,8 @@ use super::atomic::{self, WriteMode};
 use super::{dpapi, StorageError, StoragePaths};
 
 const ENVELOPE_MAGIC: &[u8; 8] = b"SMMLS\0\0\0";
-const HEADER_BYTES: usize = ENVELOPE_MAGIC.len() + size_of::<u32>();
+const STORAGE_SCHEMA_VERSION: u16 = 1;
+const HEADER_BYTES: usize = ENVELOPE_MAGIC.len() + size_of::<u16>() + size_of::<u32>();
 const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
 
 /// Native-only persistence for serialized OpenMLS provider state.
@@ -54,6 +55,7 @@ fn encode_envelope(protected: &[u8]) -> Result<Vec<u8>, StorageError> {
         .map_err(|_| StorageError::InvalidData("protected OpenMLS state is too large"))?;
     let mut envelope = Vec::with_capacity(HEADER_BYTES + protected.len());
     envelope.extend_from_slice(ENVELOPE_MAGIC);
+    envelope.extend_from_slice(&STORAGE_SCHEMA_VERSION.to_le_bytes());
     envelope.extend_from_slice(&length.to_le_bytes());
     envelope.extend_from_slice(protected);
     Ok(envelope)
@@ -68,8 +70,20 @@ fn decode_envelope(envelope: &[u8]) -> Result<&[u8], StorageError> {
             "OpenMLS state envelope header is invalid",
         ));
     }
+    let version_offset = ENVELOPE_MAGIC.len();
+    let length_offset = version_offset + size_of::<u16>();
+    let version = u16::from_le_bytes(
+        envelope[version_offset..length_offset]
+            .try_into()
+            .expect("schema version length is fixed"),
+    );
+    if version != STORAGE_SCHEMA_VERSION {
+        return Err(StorageError::InvalidData(
+            "OpenMLS storage schema version is unsupported",
+        ));
+    }
     let protected_length = u32::from_le_bytes(
-        envelope[ENVELOPE_MAGIC.len()..HEADER_BYTES]
+        envelope[length_offset..HEADER_BYTES]
             .try_into()
             .expect("header length is fixed"),
     ) as usize;
@@ -114,5 +128,21 @@ mod tests {
     fn invalid_or_empty_state_is_rejected() {
         assert!(validate_state_size(0).is_err());
         assert!(decode_envelope(b"not OpenMLS state").is_err());
+    }
+
+    #[test]
+    fn unknown_storage_schema_is_rejected_without_rewriting_the_file() {
+        let (root, store) = temporary_store();
+        fs::create_dir_all(store.paths.root()).unwrap();
+        let mut future = encode_envelope(b"protected bytes").unwrap();
+        let version_offset = ENVELOPE_MAGIC.len();
+        future[version_offset..version_offset + size_of::<u16>()]
+            .copy_from_slice(&(STORAGE_SCHEMA_VERSION + 1).to_le_bytes());
+        fs::write(store.paths.mls_state(), &future).unwrap();
+
+        assert!(store.load().is_err());
+        assert_eq!(fs::read(store.paths.mls_state()).unwrap(), future);
+
+        fs::remove_dir_all(root).unwrap();
     }
 }
