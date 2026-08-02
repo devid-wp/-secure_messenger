@@ -122,4 +122,17 @@ mod tests {
         envelope.pop();
         assert!(decode_envelope(&envelope).is_err());
     }
+
+    #[test]
+    fn corrupt_vault_is_reported_without_being_overwritten() {
+        let (root, store) = temporary_store();
+        fs::create_dir_all(store.paths.root()).unwrap();
+        let corrupt = b"corrupt vault that must be preserved";
+        fs::write(store.paths.master_key(), corrupt).unwrap();
+
+        assert!(store.load_or_create().is_err());
+        assert_eq!(fs::read(store.paths.master_key()).unwrap(), corrupt);
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }
