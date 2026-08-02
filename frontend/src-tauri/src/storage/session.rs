@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use super::atomic::{self, WriteMode};
 use super::{dpapi, StorageError, StoragePaths};
 
 const ENVELOPE_MAGIC: &[u8; 8] = b"SMSESS\0\0";
@@ -103,10 +104,10 @@ impl NativeSessionStore {
     }
 
     pub fn replace(&self, session: NativeSession) -> Result<(), StorageError> {
-        fs::create_dir_all(self.paths.root())?;
-        fs::write(
-            self.paths.session(),
-            dpapi::protect(&Self::encode(&session)?)?,
+        atomic::write(
+            &self.paths.session(),
+            &dpapi::protect(&Self::encode(&session)?)?,
+            WriteMode::Replace,
         )?;
         *self
             .current

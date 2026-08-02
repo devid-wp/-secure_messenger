@@ -1,6 +1,6 @@
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 
+use super::atomic::{self, WriteMode};
 use super::dpapi;
 use super::key::MASTER_KEY_BYTES;
 use super::{MasterKey, StorageError, StoragePaths};
@@ -78,12 +78,7 @@ impl MasterKeyStore {
         let key = MasterKey::generate()?;
         let protected = dpapi::protect(key.expose())?;
         let envelope = encode_envelope(&protected)?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(self.paths.master_key())?;
-        file.write_all(&envelope)?;
-        file.sync_all()?;
+        atomic::write(&self.paths.master_key(), &envelope, WriteMode::CreateNew)?;
         Ok(key)
     }
 }
