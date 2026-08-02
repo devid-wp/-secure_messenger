@@ -5,6 +5,10 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use super::{dpapi, StorageError, StoragePaths};
 
+const ENVELOPE_MAGIC: &[u8; 8] = b"SMSESS\0\0";
+const ENVELOPE_VERSION: u8 = 1;
+const HEADER_BYTES: usize = ENVELOPE_MAGIC.len() + 1 + size_of::<u32>();
+
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct NativeSession {
     refresh_token: String,
@@ -57,7 +61,9 @@ impl NativeSessionStore {
         let login = session.login.as_bytes();
         let token_len = u32::try_from(token.len())
             .map_err(|_| StorageError::InvalidData("session token is too large"))?;
-        let mut data = Vec::with_capacity(4 + token.len() + login.len());
+        let mut data = Vec::with_capacity(HEADER_BYTES + token.len() + login.len());
+        data.extend_from_slice(ENVELOPE_MAGIC);
+        data.push(ENVELOPE_VERSION);
         data.extend_from_slice(&token_len.to_le_bytes());
         data.extend_from_slice(token);
         data.extend_from_slice(login);
@@ -65,18 +71,33 @@ impl NativeSessionStore {
     }
 
     fn decode(data: &[u8]) -> Result<NativeSession, StorageError> {
-        if data.len() < 4 {
+        if data.len() < HEADER_BYTES {
             return Err(StorageError::InvalidData("session envelope is truncated"));
         }
-        let token_len = u32::from_le_bytes(data[..4].try_into().unwrap()) as usize;
-        if token_len == 0 || 4 + token_len >= data.len() {
+        if &data[..ENVELOPE_MAGIC.len()] != ENVELOPE_MAGIC {
+            return Err(StorageError::InvalidData(
+                "session envelope header is invalid",
+            ));
+        }
+        if data[ENVELOPE_MAGIC.len()] != ENVELOPE_VERSION {
+            return Err(StorageError::InvalidData(
+                "session envelope version is unsupported",
+            ));
+        }
+        let length_offset = ENVELOPE_MAGIC.len() + 1;
+        let token_len = u32::from_le_bytes(
+            data[length_offset..HEADER_BYTES]
+                .try_into()
+                .expect("header length is fixed"),
+        ) as usize;
+        if token_len == 0 || HEADER_BYTES + token_len >= data.len() {
             return Err(StorageError::InvalidData(
                 "session envelope length is invalid",
             ));
         }
-        let refresh_token = String::from_utf8(data[4..4 + token_len].to_vec())
+        let refresh_token = String::from_utf8(data[HEADER_BYTES..HEADER_BYTES + token_len].to_vec())
             .map_err(|_| StorageError::InvalidData("session token is not UTF-8"))?;
-        let login = String::from_utf8(data[4 + token_len..].to_vec())
+        let login = String::from_utf8(data[HEADER_BYTES + token_len..].to_vec())
             .map_err(|_| StorageError::InvalidData("session login is not UTF-8"))?;
         NativeSession::new(refresh_token, login)
     }
@@ -140,5 +161,22 @@ mod tests {
     fn empty_session_secrets_are_rejected() {
         assert!(NativeSession::new(String::new(), "alice".into()).is_err());
         assert!(NativeSession::new("token".into(), String::new()).is_err());
+    }
+
+    #[test]
+    fn session_envelope_has_a_version_and_rejects_unknown_versions() {
+        let session = NativeSession::new("secret-token".into(), "alice".into()).unwrap();
+        let envelope = NativeSessionStore::encode(&session).unwrap();
+        assert_eq!(&envelope[..ENVELOPE_MAGIC.len()], ENVELOPE_MAGIC);
+        assert_eq!(envelope[ENVELOPE_MAGIC.len()], ENVELOPE_VERSION);
+        assert_eq!(
+            NativeSessionStore::decode(&envelope).unwrap().refresh_token(),
+            "secret-token"
+        );
+
+        let mut future = envelope;
+        future[ENVELOPE_MAGIC.len()] += 1;
+        assert!(NativeSessionStore::decode(&future).is_err());
+        assert!(NativeSessionStore::decode(b"legacy unversioned envelope").is_err());
     }
 }
