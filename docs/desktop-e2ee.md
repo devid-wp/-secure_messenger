@@ -16,14 +16,17 @@ client remains available for UI development but must not claim E2EE.
 - The desktop session token is held by Rust instead of browser
   `localStorage`; logout and window close clear the session and lock the vault.
 - Private key bytes are not exposed by any Tauri command.
+- Serialized OpenMLS provider state has a native-only, versioned DPAPI storage
+  boundary at `secure-vault/openmls-state.dpapi`. OpenMLS itself is not wired
+  to this boundary yet.
 
 The current milestone does **not** encrypt messages and is not an E2EE release.
 
 The active React application still receives its bearer token in memory because
 the current HTTP and WebSocket clients run in the WebView. The improvement in
 this milestone is removal of persistent browser storage, not removal of the
-token from the renderer process. A fresh desktop process therefore requires a
-new sign-in until encrypted native session persistence is implemented.
+token from the renderer process. The rotating refresh session is persisted
+through the native DPAPI boundary; the access token remains memory-only.
 
 The DPAPI envelope is stored below the Tauri application-data directory in
 `secure-vault/master-key.dpapi`. Corrupt or unsupported envelope versions fail
