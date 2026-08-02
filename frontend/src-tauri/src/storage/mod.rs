@@ -6,11 +6,13 @@ mod atomic;
 pub mod commands;
 pub mod dpapi;
 mod key;
+mod mls_state;
 mod session;
 mod state;
 mod vault;
 
 pub(crate) use key::MasterKey;
+pub(crate) use mls_state::MlsStateStore;
 pub(crate) use session::{NativeSession, NativeSessionStore};
 pub(crate) use state::NativeVault;
 pub(crate) use vault::MasterKeyStore;
@@ -70,6 +72,10 @@ impl StoragePaths {
     pub fn session(&self) -> PathBuf {
         self.root.join("session.dpapi")
     }
+
+    pub fn mls_state(&self) -> PathBuf {
+        self.root.join("openmls-state.dpapi")
+    }
 }
 
 #[cfg(test)]
@@ -94,6 +100,7 @@ mod tests {
         assert!(paths.root().starts_with(&base));
         assert!(paths.master_key().starts_with(paths.root()));
         assert!(paths.session().starts_with(paths.root()));
+        assert!(paths.mls_state().starts_with(paths.root()));
     }
 
     #[test]

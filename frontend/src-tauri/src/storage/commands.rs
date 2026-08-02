@@ -4,11 +4,15 @@ use serde::Serialize;
 use tauri::State;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use super::{NativeSession, NativeSessionStore, NativeVault, StorageError, StoragePaths};
+use super::{
+    MlsStateStore, NativeSession, NativeSessionStore, NativeVault, StorageError, StoragePaths,
+};
 
 pub struct DesktopState {
     vault: NativeVault,
     sessions: NativeSessionStore,
+    #[allow(dead_code)]
+    mls_state: MlsStateStore,
 }
 
 impl DesktopState {
@@ -16,7 +20,8 @@ impl DesktopState {
         let paths = StoragePaths::new(app_data_dir)?;
         Ok(Self {
             vault: NativeVault::new(paths.clone()),
-            sessions: NativeSessionStore::new(paths)?,
+            sessions: NativeSessionStore::new(paths.clone())?,
+            mls_state: MlsStateStore::new(paths),
         })
     }
 
