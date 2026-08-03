@@ -3,6 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 mod atomic;
+mod device_key;
 pub mod commands;
 pub mod dpapi;
 mod key;
@@ -12,6 +13,7 @@ mod state;
 mod vault;
 
 pub(crate) use key::MasterKey;
+pub(crate) use device_key::DeviceKeyStore;
 pub(crate) use mls_state::MlsStateStore;
 pub(crate) use session::{NativeSession, NativeSessionStore};
 pub(crate) use state::NativeVault;
@@ -76,6 +78,10 @@ impl StoragePaths {
     pub fn mls_state(&self) -> PathBuf {
         self.root.join("openmls-state.dpapi")
     }
+
+    pub fn mls_signature_key(&self) -> PathBuf {
+        self.root.join("mls-signature-key.dpapi")
+    }
 }
 
 #[cfg(test)]
@@ -101,6 +107,7 @@ mod tests {
         assert!(paths.master_key().starts_with(paths.root()));
         assert!(paths.session().starts_with(paths.root()));
         assert!(paths.mls_state().starts_with(paths.root()));
+        assert!(paths.mls_signature_key().starts_with(paths.root()));
     }
 
     #[test]

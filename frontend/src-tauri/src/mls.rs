@@ -4,6 +4,9 @@ use openmls::prelude::{
 };
 use openmls_basic_credential::SignatureKeyPair;
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
+
+use crate::storage::{DeviceKeyStore, StorageError};
 
 /// The only MLS ciphersuite supported by this client.
 pub const CIPHERSUITE: Ciphersuite =
@@ -25,6 +28,24 @@ impl DeviceSignatureKey {
             .map_err(|error| format!("failed to generate device signature key: {error:?}"))?;
 
         Ok(Self { key_pair })
+    }
+
+    /// Loads the device key from the native vault or creates it there once.
+    /// No plaintext private-key file is ever written.
+    pub fn load_or_create(vault: &DeviceKeyStore) -> Result<Self, StorageError> {
+        if let Some(serialized) = vault.load()? {
+            let key_pair = serde_json::from_slice(&serialized)
+                .map_err(|_| StorageError::InvalidData("MLS device key is invalid"))?;
+            return Ok(Self { key_pair });
+        }
+
+        let key = Self::generate().map_err(StorageError::Platform)?;
+        let serialized = Zeroizing::new(
+            serde_json::to_vec(&key.key_pair)
+                .map_err(|_| StorageError::InvalidData("MLS device key cannot be serialized"))?,
+        );
+        vault.create(&serialized)?;
+        Ok(key)
     }
 
     /// Returns the public signature key used in the device's MLS credential.
