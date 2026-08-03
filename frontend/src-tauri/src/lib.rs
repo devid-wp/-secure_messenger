@@ -1,4 +1,5 @@
 mod crypto;
+mod mls;
 mod storage;
 
 use tauri::Manager;
