@@ -31,7 +31,16 @@ pub fn run() {
             storage::commands::session_clear,
             storage::commands::vault_backup,
             storage::commands::vault_restore,
-            storage::commands::mls_initialize
+            storage::commands::mls_initialize,
+            storage::commands::mls_group_create,
+            storage::commands::mls_group_add,
+            storage::commands::mls_group_join,
+            storage::commands::mls_encrypt,
+            storage::commands::mls_process,
+            storage::commands::mls_cached_application,
+            storage::commands::mls_group_members,
+            storage::commands::mls_remove_devices,
+            storage::commands::mls_self_update
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Secure Messenger desktop");
