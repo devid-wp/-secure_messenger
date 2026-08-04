@@ -141,7 +141,7 @@ pub fn mls_initialize(
     device_id: String,
     package_count: u8,
 ) -> Result<MlsBootstrap, String> {
-    if device_id.is_empty() || package_count == 0 || package_count > 100 {
+    if device_id.is_empty() || package_count > 100 {
         return Err("invalid MLS initialization parameters".into());
     }
 
