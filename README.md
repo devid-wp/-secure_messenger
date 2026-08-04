@@ -11,26 +11,19 @@ backend, but the browser attachment button intentionally remains disabled until
 the MLS client can place the random file key inside a real E2EE envelope. See
 [Stage 6 status](docs/stage-6-stickers-media.md).
 
-## Start without Docker
+## Quick start on Windows
 
-### Windows
+Install and start Docker Desktop, then double-click the only root launcher:
 
-Double-click `start.bat`. The launcher automatically:
-
-- installs Python for the current user when it is missing;
-- downloads a verified portable Node.js LTS when Node.js is missing;
-- repairs an incomplete virtual environment;
-- installs backend and frontend dependencies;
-- applies database migrations;
-- starts both servers and prints the application link.
-
-You can also run it from Command Prompt:
-
-```bat
-start.bat
+```text
+start-docker.bat
 ```
 
-### Linux and macOS
+It starts the complete stack, waits for every health check, and opens the
+application automatically. Scripts under `scripts/` are developer tools and
+are not needed for normal use.
+
+## Start without Docker on Linux and macOS
 
 Install Python 3.12+ and Node.js 20+, then run:
 
@@ -39,7 +32,7 @@ chmod +x start.sh
 ./start.sh
 ```
 
-Both launchers use SQLite, so PostgreSQL, Redis, and Docker are not required.
+This launcher uses SQLite, so PostgreSQL, Redis, and Docker are not required.
 Python and npm packages are installed only on the first run or when
 `requirements*.txt`/`package-lock.json` changes. Alembic migrations still run
 on every start because they are incremental and safe.
@@ -72,13 +65,13 @@ Run the prerequisite diagnostics without starting anything:
 .\scripts\desktop-doctor.ps1
 ```
 
-Start the desktop application from the repository root:
+Developers can start the unsigned desktop application directly with PowerShell:
 
 ```powershell
-.\start-desktop.bat
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-desktop.ps1
 ```
 
-The launcher loads the MSVC developer environment, starts FastAPI when port
+The script loads the MSVC developer environment, starts FastAPI when port
 8000 is not already available, and then runs `tauri dev`. Desktop logs are
 written under `.run`. The launcher stops only the backend process that it
 started itself.
