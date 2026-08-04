@@ -40,3 +40,8 @@ export async function clearNativeSession() {
   await invokeDesktop('session_clear')
   return true
 }
+
+export async function initializeNativeMls(deviceId, packageCount) {
+  if (!isDesktopRuntime()) return null
+  return invokeDesktop('mls_initialize', { deviceId, packageCount })
+}
