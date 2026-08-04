@@ -2,11 +2,14 @@ use std::path::Path;
 
 use serde::Serialize;
 use tauri::State;
+use tls_codec::Serialize as TlsSerialize;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use super::{
-    MlsStateStore, NativeSession, NativeSessionStore, NativeVault, StorageError, StoragePaths,
+    DeviceKeyStore, MlsStateStore, NativeSession, NativeSessionStore, NativeVault, StorageError,
+    StoragePaths,
 };
+use crate::mls::{self, DeviceSignatureKey};
 
 pub struct DesktopState {
     paths: StoragePaths,
@@ -38,6 +41,14 @@ impl DesktopState {
     pub fn lock(&self) -> Result<(), StorageError> {
         self.sessions.clear()?;
         self.vault.lock()
+    }
+
+    pub fn mls_available(&self) -> bool {
+        DeviceKeyStore::new(self.paths.clone())
+            .load()
+            .map(|key| key.is_some())
+            .unwrap_or(false)
+            && self.mls_state.load().map(|state| state.is_some()).unwrap_or(false)
     }
 }
 
@@ -96,6 +107,15 @@ pub fn session_clear(state: State<'_, DesktopState>) -> Result<(), String> {
     state.lock().map_err(command_error)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MlsBootstrap {
+    identity_key: Vec<u8>,
+    fingerprint: String,
+    cipher_suite: u16,
+    key_packages: Vec<Vec<u8>>,
+}
+
 #[tauri::command]
 pub fn vault_backup(
     state: State<'_, DesktopState>,
@@ -113,6 +133,40 @@ pub fn vault_restore(
     state
         .restore_backup(Path::new(&source), &recovery_key)
         .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn mls_initialize(
+    state: State<'_, DesktopState>,
+    device_id: String,
+    package_count: u8,
+) -> Result<MlsBootstrap, String> {
+    if device_id.is_empty() || package_count == 0 || package_count > 100 {
+        return Err("invalid MLS initialization parameters".into());
+    }
+
+    state.vault.unlock().map_err(command_error)?;
+    let device_key = DeviceSignatureKey::load_or_create(&DeviceKeyStore::new(state.paths.clone()))
+        .map_err(command_error)?;
+    let provider = mls::load_provider(&state.mls_state).map_err(command_error)?;
+    let mut key_packages = Vec::with_capacity(package_count as usize);
+    for _ in 0..package_count {
+        let bundle = device_key
+            .generate_key_package(&provider, device_id.as_bytes().to_vec())?;
+        key_packages.push(
+            bundle
+                .key_package()
+                .tls_serialize_detached()
+                .map_err(|_| "failed to serialize MLS KeyPackage")?,
+        );
+    }
+    mls::save_provider(&provider, &state.mls_state).map_err(command_error)?;
+    Ok(MlsBootstrap {
+        identity_key: device_key.public_key_bytes(),
+        fingerprint: device_key.fingerprint(),
+        cipher_suite: mls::CIPHERSUITE_ID,
+        key_packages,
+    })
 }
 
 #[cfg(test)]
