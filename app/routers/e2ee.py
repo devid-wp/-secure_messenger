@@ -4,7 +4,7 @@ from hashlib import sha256
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -14,12 +14,14 @@ from app.schemas import (
     DeviceIdentityPublish,
     DeviceIdentityResponse,
     KeyPackagePublish,
+    KeyPackageInventory,
     KeyPackageResponse,
     SecurityEventResponse,
 )
 
 
 router = APIRouter(prefix="/e2ee", tags=["e2ee"])
+MLS_CIPHER_SUITE = 1
 
 
 def _identity_response(device: Device) -> dict:
@@ -162,6 +164,8 @@ async def publish_key_packages(
 ):
     if current_device.identity_key is None:
         raise HTTPException(status_code=409, detail="Publish device identity first")
+    if request_body.cipher_suite != MLS_CIPHER_SUITE:
+        raise HTTPException(status_code=422, detail="Unsupported MLS ciphersuite")
     expires_at = request_body.expires_at
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
@@ -182,6 +186,22 @@ async def publish_key_packages(
         )
     await session.commit()
     return {"published": len(packages)}
+
+
+@router.get("/key-packages/status", response_model=KeyPackageInventory)
+async def key_package_inventory(
+    current_device: Device = Depends(get_active_device),
+    session: AsyncSession = Depends(get_db),
+):
+    available = await session.scalar(
+        select(func.count(MlsKeyPackage.id)).where(
+            MlsKeyPackage.device_id == current_device.id,
+            MlsKeyPackage.claimed_at.is_(None),
+            MlsKeyPackage.expires_at > datetime.now(timezone.utc),
+            MlsKeyPackage.cipher_suite == MLS_CIPHER_SUITE,
+        )
+    )
+    return {"available": available or 0, "cipher_suite": MLS_CIPHER_SUITE}
 
 
 @router.post(

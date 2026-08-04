@@ -82,6 +82,11 @@ class KeyPackageResponse(BaseModel):
     expires_at: datetime
 
 
+class KeyPackageInventory(BaseModel):
+    available: int
+    cipher_suite: int
+
+
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
