@@ -133,6 +133,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
                 if event_type != "send_message":
                     raise ValueError
+                await websocket.send_json({
+                    "type": "error",
+                    "detail": "Legacy plaintext message transport is disabled; use an MLS envelope",
+                })
+                continue
                 chat_id = payload["chat_id"]
                 message_kind = payload.get("kind", "text")
                 content = payload.get("content", payload.get("text", ""))

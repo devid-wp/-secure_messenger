@@ -102,6 +102,10 @@ async def edit_message(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
+    raise HTTPException(
+        status_code=410,
+        detail="Plaintext edits are disabled; publish an MLS application mutation",
+    )
     message = await session.scalar(
         select(Message)
         .where(

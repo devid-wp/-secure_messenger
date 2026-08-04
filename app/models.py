@@ -641,3 +641,29 @@ class MessageReceipt(Base):
 
     message: Mapped[Message] = relationship(back_populates="receipts")
     user: Mapped[User] = relationship()
+
+
+class MlsEnvelope(Base):
+    """Opaque MLS wire data. The server never parses or decrypts ``payload``."""
+
+    __tablename__ = "mls_envelopes"
+    __table_args__ = (
+        CheckConstraint("epoch >= 0", name="epoch"),
+        CheckConstraint(
+            "content_type IN ('application', 'commit', 'proposal', 'welcome')",
+            name="content_type",
+        ),
+        CheckConstraint("length(payload) BETWEEN 1 AND 1048576", name="payload_size"),
+        UniqueConstraint("sender_device_id", "message_hash", name="uq_mls_envelope_sender_hash"),
+        Index("ix_mls_envelopes_chat_id_id", "chat_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
+    sender_device_id: Mapped[str] = mapped_column(ForeignKey("devices.id", ondelete="RESTRICT"), nullable=False)
+    recipient_device_id: Mapped[Optional[str]] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    message_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

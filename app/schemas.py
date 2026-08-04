@@ -87,6 +87,24 @@ class KeyPackageInventory(BaseModel):
     cipher_suite: int
 
 
+class MlsEnvelopePublish(BaseModel):
+    epoch: int = Field(ge=0)
+    content_type: Literal["application", "commit", "proposal", "welcome"]
+    payload: Base64Bytes = Field(min_length=1, max_length=1_048_576)
+    recipient_device_id: str | None = Field(default=None, max_length=36)
+
+
+class MlsEnvelopeResponse(BaseModel):
+    id: int
+    chat_id: int
+    sender_device_id: str
+    recipient_device_id: str | None
+    epoch: int
+    content_type: str
+    payload: Base64Bytes
+    created_at: datetime
+
+
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
