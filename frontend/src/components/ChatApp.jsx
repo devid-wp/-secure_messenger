@@ -15,6 +15,15 @@ import {
   SearchInput,
 } from './MessengerUI'
 import './ChatApp.css'
+import {
+  decryptEnvelope,
+  e2eeAvailable,
+  encryptAndPublish,
+  removeRevokedDevice,
+  removeMlsMembers,
+  rotateMlsEpoch,
+  synchronizeMlsGroup,
+} from '../crypto/e2eeMessaging'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const WS_URL = API_URL
@@ -27,15 +36,14 @@ const IMAGE_ATTACHMENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']
 const QUICK_EMOJI = ['😀', '😂', '❤️', '👍', '🔥', '🎉', '😎', '🤝', '👀', '✅', '🔒', '✨', '🙏', '💜', '🚀', '🫡']
 
 function readOutbox(login) {
-  try {
-    return JSON.parse(localStorage.getItem(`outbox:${login}`) || '[]')
-  } catch {
-    return []
-  }
+  void login
+  return []
 }
 
 function writeOutbox(login, items) {
-  localStorage.setItem(`outbox:${login}`, JSON.stringify(items))
+  // Plaintext drafts/outbox entries must never be persisted by the renderer.
+  void login
+  void items
 }
 
 function chatTitle(chat, currentLogin) {
@@ -55,20 +63,6 @@ function messageTime(timestamp) {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-function websocketMessagePayload(message) {
-  return {
-    type: 'send_message',
-    kind: message.kind || 'text',
-    chat_id: message.chat_id,
-    content: message.content,
-    client_id: message.client_id,
-    reply_to_server_seq: message.reply_to_server_seq,
-    sticker_id: message.sticker?.id ?? message.sticker_id ?? null,
-    attachment_id: message.attachment?.id ?? message.attachment_id ?? null,
-    key_envelope: message.key_envelope ?? null,
-  }
 }
 
 function bytesToBase64(bytes) {
@@ -241,7 +235,7 @@ async function cropSticker(file, zoom) {
   })
 }
 
-function ChatApp({ token, login, onLogout }) {
+function ChatApp({ token, login, deviceId, onLogout }) {
   const [chats, setChats] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
@@ -307,6 +301,8 @@ function ChatApp({ token, login, onLogout }) {
   const outboxRef = useRef(readOutbox(login))
   const reconnectTimerRef = useRef(null)
   const readReceiptsRef = useRef(new Set())
+  const decryptedEnvelopesRef = useRef(new Map())
+  const sentSinceUpdateRef = useRef(new Map())
   const profileAvatarPreviewRef = useRef(null)
   const stickerPreviewRef = useRef(null)
 
@@ -535,8 +531,9 @@ function ChatApp({ token, login, onLogout }) {
     const loadMessages = async () => {
       setMessagesLoading(true)
       try {
+        await synchronizeMlsGroup(token, deviceId, selectedChatId)
         const response = await fetch(
-          `${API_URL}/api/v1/chats/${selectedChatId}/messages`,
+          `${API_URL}/api/v1/e2ee/chats/${selectedChatId}/envelopes?after=0`,
           { headers: authHeaders }
         )
         if (response.status === 401) {
@@ -544,13 +541,38 @@ function ChatApp({ token, login, onLogout }) {
           return
         }
         if (!response.ok) throw new Error('Could not load messages')
-        const data = await response.json()
+        const envelopes = await response.json()
+        const decrypted = []
+        for (const envelope of envelopes) {
+          if (envelope.content_type !== 'application') continue
+          let item = decryptedEnvelopesRef.current.get(envelope.id)
+          if (!item) {
+            try {
+              item = await decryptEnvelope(selectedChatId, envelope)
+              if (item) decryptedEnvelopesRef.current.set(envelope.id, item)
+            } catch {
+              // Duplicate/replay and an unavailable epoch fail closed.
+            }
+          }
+          if (item?.operation === 'edit') {
+            const target = decrypted.find((message) => message.client_id === item.target_client_id)
+            if (target?.sender === item.sender) Object.assign(target, { content: item.content, edited_at: envelope.created_at })
+          } else if (item?.operation === 'delete') {
+            const target = decrypted.find((message) => message.client_id === item.target_client_id)
+            if (target?.sender === item.sender) Object.assign(target, { content: '', deleted_at: envelope.created_at })
+          } else if (item) decrypted.push({
+              ...item,
+              id: `mls:${envelope.id}`,
+              timestamp: envelope.created_at,
+              mls_epoch: envelope.epoch,
+            })
+        }
         if (!cancelled) {
           const pending = outboxRef.current.filter(
             (message) => message.chat_id === selectedChatId
           )
-          setMessages([...data.items, ...pending])
-          setNextCursor(data.next_cursor)
+          setMessages([...decrypted, ...pending])
+          setNextCursor(null)
           setChats((previous) => previous.map((chat) => (
             chat.id === selectedChatId ? { ...chat, unread_count: 0 } : chat
           )))
@@ -571,7 +593,7 @@ function ChatApp({ token, login, onLogout }) {
     return () => {
       cancelled = true
     }
-  }, [authHeaders, historyRefresh, onLogout, selectedChatId])
+  }, [authHeaders, deviceId, historyRefresh, onLogout, selectedChatId, token])
 
   const loadOlderMessages = async () => {
     if (!nextCursor || selectedChatId === null || loadingOlder) return
@@ -620,10 +642,6 @@ function ChatApp({ token, login, onLogout }) {
         reconnectAttempt = 0
         setWsReady(true)
         setError('')
-        for (const pending of outboxRef.current) {
-          updateMessageStatus(pending.client_id, 'sending')
-          ws.send(JSON.stringify(websocketMessagePayload(pending)))
-        }
         setHistoryRefresh((value) => value + 1)
       }
 
@@ -664,6 +682,10 @@ function ChatApp({ token, login, onLogout }) {
             } else if (data.event === 'fingerprint_changed') {
               setError('Security warning: a contact device fingerprint changed. Verify the safety code before continuing.')
             }
+            return
+          }
+          if (data.type === 'mls_envelope') {
+            setHistoryRefresh((value) => value + 1)
             return
           }
           if (data.type === 'message_ack') {
@@ -818,9 +840,8 @@ function ChatApp({ token, login, onLogout }) {
     }
   }
 
-  const sendMessage = (event) => {
+  const sendMessage = async (event) => {
     event?.preventDefault()
-    const ws = wsRef.current
     const text = inputText.trim()
     if (
       !text
@@ -841,27 +862,39 @@ function ChatApp({ token, login, onLogout }) {
       timestamp: new Date().toISOString(),
       status: 'sending',
       reply_to_server_seq: replyingTo?.server_seq ?? null,
+      reply_to_client_id: replyingTo?.client_id ?? null,
       reply_to_sender: replyingTo?.sender ?? null,
       reply_to_content: replyingTo?.content ?? null,
     }
     outboxRef.current = [...outboxRef.current, pendingMessage]
     writeOutbox(login, outboxRef.current)
     setMessages((previous) => [...previous, pendingMessage])
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(websocketMessagePayload(pendingMessage)))
-    }
-    window.setTimeout(() => {
-      if (outboxRef.current.some((item) => item.client_id === clientId)) {
-        setMessages((previous) => previous.map((message) => (
-          message.client_id === clientId
-            ? { ...message, status: 'failed' }
-            : message
-        )))
-      }
-    }, 10000)
     setInputText('')
     setReplyingTo(null)
     inputRef.current?.focus()
+    try {
+      if (!e2eeAvailable()) throw new Error('Sending is disabled: native MLS is unavailable')
+      await synchronizeMlsGroup(token, deviceId, selectedChatId)
+      const envelope = await encryptAndPublish(token, selectedChatId, pendingMessage)
+      decryptedEnvelopesRef.current.set(envelope.id, pendingMessage)
+      outboxRef.current = outboxRef.current.filter((item) => item.client_id !== clientId)
+      const sentCount = (sentSinceUpdateRef.current.get(selectedChatId) || 0) + 1
+      sentSinceUpdateRef.current.set(selectedChatId, sentCount)
+      if (sentCount >= 100) {
+        await rotateMlsEpoch(token, selectedChatId)
+        sentSinceUpdateRef.current.set(selectedChatId, 0)
+      }
+      setMessages((previous) => previous.map((message) => (
+        message.client_id === clientId
+          ? { ...message, id: `mls:${envelope.id}`, status: 'sent', timestamp: envelope.created_at, mls_epoch: envelope.epoch }
+          : message
+      )))
+    } catch (sendError) {
+      setError(sendError.message || 'Encrypted message could not be sent')
+      setMessages((previous) => previous.map((message) => (
+        message.client_id === clientId ? { ...message, status: 'failed' } : message
+      )))
+    }
   }
 
   const editMessage = (message) => {
@@ -872,15 +905,19 @@ function ChatApp({ token, login, onLogout }) {
   const submitMessageEdit = async (event) => {
     event.preventDefault()
     if (!editText.trim() || !editingMessage) return
-    const response = await fetch(
-      `${API_URL}/api/v1/chats/${editingMessage.chat_id}/messages/${editingMessage.server_seq}`,
-      {
-        method: 'PATCH',
-        headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: editText.trim() }),
-      }
-    )
-    if (!response.ok) {
+    try {
+      await encryptAndPublish(token, editingMessage.chat_id, {
+        operation: 'edit',
+        sender: login,
+        target_client_id: editingMessage.client_id,
+        content: editText.trim(),
+      })
+      setMessages((previous) => previous.map((message) => (
+        message.client_id === editingMessage.client_id
+          ? { ...message, content: editText.trim(), edited_at: new Date().toISOString() }
+          : message
+      )))
+    } catch {
       setError('Could not edit the message')
       return
     }
@@ -890,11 +927,18 @@ function ChatApp({ token, login, onLogout }) {
 
   const deleteMessage = async (message) => {
     if (!window.confirm('Delete this message?')) return
-    const response = await fetch(
-      `${API_URL}/api/v1/chats/${message.chat_id}/messages/${message.server_seq}`,
-      { method: 'DELETE', headers: authHeaders }
-    )
-    if (!response.ok) setError('Could not delete the message')
+    try {
+      await encryptAndPublish(token, message.chat_id, {
+        operation: 'delete', sender: login, target_client_id: message.client_id,
+      })
+      setMessages((previous) => previous.map((item) => (
+        item.client_id === message.client_id
+          ? { ...item, content: '', deleted_at: new Date().toISOString() }
+          : item
+      )))
+    } catch {
+      setError('Could not delete the message')
+    }
   }
 
   const blockSelectedUser = async () => {
@@ -971,6 +1015,19 @@ function ChatApp({ token, login, onLogout }) {
     const normalizedLogin = loginValue.trim().replace(/^@/, '')
     if (!normalizedLogin || !selectedChatId || memberBusy) return
     setMemberBusy(true)
+    let removedDeviceIds = []
+    if (action === 'remove') {
+      const directoryResponse = await fetch(
+        `${API_URL}/api/v1/e2ee/chats/${selectedChatId}/devices`,
+        { headers: authHeaders }
+      )
+      if (directoryResponse.ok) {
+        const directory = await directoryResponse.json()
+        removedDeviceIds = directory.devices
+          .filter((device) => device.login === normalizedLogin)
+          .map((device) => device.device_id)
+      }
+    }
     const paths = {
       invite: `invitations`,
       add: `members`,
@@ -993,6 +1050,9 @@ function ChatApp({ token, login, onLogout }) {
       )))
     }
     if (response.ok) {
+      if (action === 'remove' && removedDeviceIds.length) {
+        await removeMlsMembers(token, selectedChatId, removedDeviceIds)
+      }
       setMemberDialog(null)
       setMemberLogin('')
     }
@@ -1089,8 +1149,9 @@ function ChatApp({ token, login, onLogout }) {
         onLogout()
         return
       }
+      const updatedChats = await removeRevokedDevice(token, chats.map((chat) => chat.id), device.id)
       await refreshDevices()
-      setError('Device revoked immediately. MLS remove commit is required before encrypted sending resumes.')
+      setError(`Device revoked; MLS Remove Commit applied in ${updatedChats.length} conversation(s).`)
     } catch (revokeError) {
       setError(revokeError.message)
     } finally {
@@ -1365,8 +1426,7 @@ function ChatApp({ token, login, onLogout }) {
     setDiscoverPacks(discover)
   }
 
-  const sendSticker = (sticker) => {
-    const ws = wsRef.current
+  const sendSticker = async (sticker) => {
     if (selectedChatId === null) return
     const clientId = crypto.randomUUID()
     const pendingMessage = {
@@ -1387,10 +1447,22 @@ function ChatApp({ token, login, onLogout }) {
     outboxRef.current = [...outboxRef.current, pendingMessage]
     writeOutbox(login, outboxRef.current)
     setMessages((previous) => [...previous, pendingMessage])
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(websocketMessagePayload(pendingMessage)))
-    }
     setStickerPickerOpen(false)
+    try {
+      await synchronizeMlsGroup(token, deviceId, selectedChatId)
+      const envelope = await encryptAndPublish(token, selectedChatId, pendingMessage)
+      decryptedEnvelopesRef.current.set(envelope.id, pendingMessage)
+      outboxRef.current = outboxRef.current.filter((item) => item.client_id !== clientId)
+      setMessages((previous) => previous.map((message) => (
+        message.client_id === clientId ? { ...message, id: `mls:${envelope.id}`, status: 'sent' } : message
+      )))
+      await synchronizeMlsGroup(token, deviceId, selectedChatId)
+    } catch (sendError) {
+      setError(sendError.message || 'Encrypted sticker could not be sent')
+      setMessages((previous) => previous.map((message) => (
+        message.client_id === clientId ? { ...message, status: 'failed' } : message
+      )))
+    }
   }
 
   const leaveGroup = async () => {
@@ -1530,10 +1602,13 @@ function ChatApp({ token, login, onLogout }) {
       outboxRef.current = [...outboxRef.current, pendingMessage]
       writeOutbox(login, outboxRef.current)
       setMessages((previous) => [...previous, pendingMessage])
-      const ws = wsRef.current
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(websocketMessagePayload(pendingMessage)))
-      }
+      await synchronizeMlsGroup(token, deviceId, selectedChatId)
+      const envelope = await encryptAndPublish(token, selectedChatId, pendingMessage)
+      decryptedEnvelopesRef.current.set(envelope.id, pendingMessage)
+      outboxRef.current = outboxRef.current.filter((item) => item.client_id !== clientId)
+      setMessages((previous) => previous.map((message) => (
+        message.client_id === clientId ? { ...message, id: `mls:${envelope.id}`, status: 'sent' } : message
+      )))
     } catch (attachmentError) {
       setError(attachmentError.message || 'Could not encrypt attachment')
     } finally {
@@ -1726,7 +1801,7 @@ function ChatApp({ token, login, onLogout }) {
               >
                 {!own && !grouped ? <Avatar name={message.sender} size={36} /> : !own ? <span className="message-avatar-spacer" /> : null}
                 <div className="message__body">
-                  {message.reply_to_server_seq && (
+                  {(message.reply_to_server_seq || message.reply_to_client_id) && (
                     <div className="message__reply">
                       <strong>{message.reply_to_sender}</strong>
                       <span>
@@ -1764,7 +1839,7 @@ function ChatApp({ token, login, onLogout }) {
                     {message.edited_at && !message.deleted_at && <span className="edited-label">edited</span>}
                     {own && <MessageStatus status={message.status} />}
                   </span>
-                  {!message.deleted_at && message.server_seq && (
+                  {!message.deleted_at && message.client_id && (
                     <MessageActions message={message} own={own} onReply={setReplyingTo} onEdit={editMessage} onDelete={deleteMessage} />
                   )}
                 </div>
@@ -1795,13 +1870,13 @@ function ChatApp({ token, login, onLogout }) {
           }}
           onAttach={() => attachmentInputRef.current?.click()}
           conversation={selectedConversation}
-          disabled={selectedChatId === null}
+          disabled={selectedChatId === null || !e2eeAvailable()}
         />
         <input
           ref={attachmentInputRef}
           className="visually-hidden"
           type="file"
-          disabled={attachmentBusy || selectedChatId === null}
+          disabled={attachmentBusy || selectedChatId === null || !e2eeAvailable()}
           onChange={(event) => {
             void chooseAttachment(event.target.files)
             event.target.value = ''

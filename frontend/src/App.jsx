@@ -166,7 +166,7 @@ function App() {
       {!token ? (
         <LoginForm onLogin={handleLogin} />
       ) : (
-        <ChatApp token={token} login={login} onLogout={handleLogout} />
+        <ChatApp token={token} login={login} deviceId={deviceId} onLogout={handleLogout} />
       )}
     </div>
   )
