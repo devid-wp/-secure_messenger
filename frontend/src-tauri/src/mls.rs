@@ -3,14 +3,16 @@ use openmls::prelude::{
     OpenMlsProvider, SignaturePublicKey,
 };
 use openmls_basic_credential::SignatureKeyPair;
+use openmls_rust_crypto::OpenMlsRustCrypto;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use crate::storage::{DeviceKeyStore, StorageError};
+use crate::storage::{DeviceKeyStore, MlsStateStore, StorageError};
 
 /// The only MLS ciphersuite supported by this client.
 pub const CIPHERSUITE: Ciphersuite =
     Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
+pub const CIPHERSUITE_ID: u16 = 1;
 
 /// A signature identity belonging to this device.
 ///
@@ -53,6 +55,10 @@ impl DeviceSignatureKey {
         self.key_pair.public().into()
     }
 
+    pub fn public_key_bytes(&self) -> Vec<u8> {
+        self.key_pair.public().to_vec()
+    }
+
     /// Provides the signer to OpenMLS while keeping ownership device-scoped.
     pub fn signer(&self) -> &SignatureKeyPair {
         &self.key_pair
@@ -89,6 +95,37 @@ impl DeviceSignatureKey {
             .build(CIPHERSUITE, provider, &self.key_pair, self.credential(identity))
             .map_err(|error| format!("failed to generate MLS KeyPackage: {error:?}"))
     }
+}
+
+pub fn load_provider(store: &MlsStateStore) -> Result<OpenMlsRustCrypto, StorageError> {
+    let provider = OpenMlsRustCrypto::default();
+    if let Some(serialized) = store.load()? {
+        let values = serde_json::from_slice(&serialized)
+            .map_err(|_| StorageError::InvalidData("OpenMLS provider state is invalid"))?;
+        *provider
+            .storage()
+            .values
+            .write()
+            .map_err(|_| StorageError::Platform("OpenMLS provider state is poisoned".into()))? =
+            values;
+    }
+    Ok(provider)
+}
+
+pub fn save_provider(
+    provider: &OpenMlsRustCrypto,
+    store: &MlsStateStore,
+) -> Result<(), StorageError> {
+    let values = provider
+        .storage()
+        .values
+        .read()
+        .map_err(|_| StorageError::Platform("OpenMLS provider state is poisoned".into()))?;
+    let serialized = Zeroizing::new(
+        serde_json::to_vec(&*values)
+            .map_err(|_| StorageError::InvalidData("OpenMLS provider state cannot be serialized"))?,
+    );
+    store.save(&serialized)
 }
 
 #[cfg(test)]

@@ -3483,6 +3483,7 @@ dependencies = [
  "sha2",
  "tauri",
  "tauri-build",
+ "tls_codec",
  "windows-sys 0.61.2",
  "zeroize",
 ]
