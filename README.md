@@ -2,61 +2,45 @@
 
 FastAPI, React and Tauri messenger with a native OpenMLS cryptographic boundary.
 
-## One-click Windows start
+## Open as a Windows application
 
-Double-click the only launcher in the repository root:
+Double-click:
 
 ```text
-start-docker.bat
+Secure Messenger.bat
 ```
 
-It automatically:
+On first launch, paste the HTTPS address of the hosted messenger. The address
+is stored under `%LOCALAPPDATA%\SecureMessenger\web-app-url.txt`; subsequent
+launches open immediately.
 
-1. checks for Docker Desktop;
-2. installs the official Docker Desktop package when it is missing;
-3. starts Docker and waits for its engine;
-4. builds the application images on first launch;
-5. starts PostgreSQL, Redis, MinIO, FastAPI and the frontend;
-6. applies database migrations and waits for all health checks;
-7. opens `http://localhost:8080`.
+The launcher uses Microsoft Edge or Google Chrome application mode, so the
+messenger gets its own window without browser tabs or an address bar. If neither
+browser is found, it opens in the Windows default browser. Docker, WSL, Python,
+Node.js, Rust and administrator rights are not required for users.
 
-Docker Desktop installation can request administrator approval. Windows may
-require one restart after enabling WSL 2; run `start-docker.bat` again after it.
-If Windows reports component-store corruption `14098`, the launcher runs the
-Microsoft-recommended DISM and SFC repair sequence before requesting a restart.
+To change the saved site, delete:
 
-Useful commands:
-
-```bat
-start-docker.bat -Status
-start-docker.bat -Logs
-start-docker.bat -Stop
-start-docker.bat -Rebuild
+```text
+%LOCALAPPDATA%\SecureMessenger\web-app-url.txt
 ```
 
-Persistent database and media volumes are preserved by `-Stop`. To remove them
-intentionally, run `docker compose down --volumes` manually.
+## Installable PWA
 
-## Services
-
-- Application: `http://localhost:8080`
-- Backend API: `http://localhost:8000`
-- OpenAPI: `http://localhost:8000/docs`
-- MinIO console: `http://localhost:9001`
+The hosted frontend includes a web-app manifest, application icons and a
+service worker. On HTTPS deployments, Edge and Chrome can install it directly
+from the browser menu. An installed PWA receives its own Start menu entry and
+taskbar icon and does not require the BAT launcher afterward.
 
 ## Development
 
-The Docker workflow is the supported local runtime. Individual components can
-still be run directly with standard `uvicorn`, `npm`, `cargo`, Alembic and
-pytest commands when developing them.
-
 ```powershell
-docker compose up -d --wait
-docker compose logs -f
-python -m pytest
 cd frontend
+npm install
 npm run lint
 npm run build
 ```
 
-Architecture and security documentation is under [docs](docs/README.md).
+Backend development and deployment use standard FastAPI, Alembic and pytest
+commands. Architecture and security documentation is under
+[docs](docs/README.md).
