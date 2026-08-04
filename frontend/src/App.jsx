@@ -7,6 +7,7 @@ import {
   readNativeSession,
   saveNativeSession,
 } from './crypto/desktopBridge'
+import { synchronizeDeviceMls } from './crypto/e2eeBootstrap'
 import './App.css'
 
 function App() {
@@ -15,6 +16,7 @@ function App() {
   const [login, setLogin] = useState(null)
   const [refreshToken, setRefreshToken] = useState(null)
   const [accessExpiresAt, setAccessExpiresAt] = useState(null)
+  const [deviceId, setDeviceId] = useState(null)
   const [sessionReady, setSessionReady] = useState(false)
 
   useEffect(() => {
@@ -41,6 +43,7 @@ function App() {
         setToken(data.access_token)
         setLogin(data.login)
         setAccessExpiresAt(Date.now() + data.expires_in * 1000)
+        setDeviceId(data.device_id)
         if (desktop && data.refresh_token) {
           setRefreshToken(data.refresh_token)
           await saveNativeSession(data.refresh_token, data.login)
@@ -80,6 +83,7 @@ function App() {
         const data = await response.json()
         setToken(data.access_token)
         setAccessExpiresAt(Date.now() + data.expires_in * 1000)
+        setDeviceId(data.device_id)
         if (desktop && data.refresh_token) {
           setRefreshToken(data.refresh_token)
           await saveNativeSession(data.refresh_token, data.login)
@@ -89,6 +93,7 @@ function App() {
         setLogin(null)
         setRefreshToken(null)
         setAccessExpiresAt(null)
+        setDeviceId(null)
         if (desktop) await clearNativeSession().catch(() => {})
       }
     }, delay)
@@ -103,6 +108,7 @@ function App() {
     setToken(newToken)
     setLogin(newLogin)
     setAccessExpiresAt(Date.now() + data.expires_in * 1000)
+    setDeviceId(data.device_id)
   }
 
   const handleLogout = async () => {
@@ -140,8 +146,16 @@ function App() {
       setLogin(null)
       setRefreshToken(null)
       setAccessExpiresAt(null)
+      setDeviceId(null)
     }
   }
+
+  useEffect(() => {
+    if (!desktop || !token || !deviceId) return
+    synchronizeDeviceMls(token, deviceId).catch(() => {
+      // ChatApp keeps sending disabled while native crypto reports unavailable.
+    })
+  }, [desktop, deviceId, token])
 
   if (!sessionReady) {
     return <div className="app" aria-busy="true" />
