@@ -12,6 +12,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $compose = Join-Path $projectRoot 'compose.yaml'
 $dockerDesktop = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
 $dockerBin = Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin'
+$dockerPlugins = Join-Path $env:ProgramFiles 'Docker\Docker\resources\cli-plugins'
 
 function Invoke-Docker {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
@@ -19,9 +20,33 @@ function Invoke-Docker {
     if ($LASTEXITCODE -ne 0) { throw "Docker command failed with exit code $LASTEXITCODE." }
 }
 
+function Test-DockerEngine {
+    & cmd.exe /d /c "docker info >nul 2>nul"
+    return $LASTEXITCODE -eq 0
+}
+
+function Get-ComposeMode {
+    & cmd.exe /d /c "docker compose version >nul 2>nul"
+    if ($LASTEXITCODE -eq 0) { return 'plugin' }
+    if (Get-Command docker-compose.exe -ErrorAction SilentlyContinue) { return 'legacy' }
+    return $null
+}
+
+function Invoke-Compose {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+    $mode = Get-ComposeMode
+    if ($mode -eq 'plugin') { & docker compose @Arguments }
+    elseif ($mode -eq 'legacy') { & docker-compose @Arguments }
+    else { throw 'Docker Compose is not installed. Finish Docker Desktop installation and restart Windows.' }
+    if ($LASTEXITCODE -ne 0) { throw "Docker Compose failed with exit code $LASTEXITCODE." }
+}
+
 function Refresh-DockerPath {
     if ((Test-Path $dockerBin) -and ($env:Path -notlike "*$dockerBin*")) {
         $env:Path = "$dockerBin;$env:Path"
+    }
+    if ((Test-Path $dockerPlugins) -and ($env:Path -notlike "*$dockerPlugins*")) {
+        $env:Path = "$dockerPlugins;$env:Path"
     }
 }
 
@@ -54,15 +79,16 @@ function Install-DockerDesktop {
 function Wait-DockerEngine {
     Refresh-DockerPath
     if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) { Install-DockerDesktop }
-    & docker info *> $null
-    if ($LASTEXITCODE -eq 0) { return }
+    if (Test-DockerEngine) { return }
     if (-not (Test-Path $dockerDesktop)) { throw 'Docker Desktop installation is incomplete.' }
     Write-Host 'Starting Docker Desktop...' -ForegroundColor Cyan
-    Start-Process -FilePath $dockerDesktop
+    $desktopProcess = Start-Process -FilePath $dockerDesktop -PassThru
     for ($attempt = 1; $attempt -le 60; $attempt++) {
         Start-Sleep -Seconds 3
-        & docker info *> $null
-        if ($LASTEXITCODE -eq 0) { return }
+        if (Test-DockerEngine) { return }
+        if ($attempt -ge 3 -and $desktopProcess.HasExited) {
+            throw 'Docker Desktop exited before its engine started. Restart Windows to finish WSL 2 setup, then run start-docker.bat again.'
+        }
         if ($attempt % 5 -eq 0) { Write-Host "Waiting for Docker engine... ($($attempt * 3)s)" }
     }
     throw 'Docker engine did not become ready. Restart Windows and run start-docker.bat again.'
@@ -73,24 +99,31 @@ try {
     Push-Location $projectRoot
     try {
         if ($Stop) {
-            Invoke-Docker compose -f $compose down
+            Invoke-Compose -f $compose down
             Write-Host 'Secure Messenger stopped. Persistent data was preserved.' -ForegroundColor Green
             exit 0
         }
-        if ($Status) { Invoke-Docker compose -f $compose ps; exit 0 }
-        if ($Logs) { Invoke-Docker compose -f $compose logs -f --tail 100; exit 0 }
+        if ($Status) { Invoke-Compose -f $compose ps; exit 0 }
+        if ($Logs) { Invoke-Compose -f $compose logs -f --tail 100; exit 0 }
 
-        $backendImage = (& docker compose -f $compose images -q backend 2>$null)
-        $frontendImage = (& docker compose -f $compose images -q frontend 2>$null)
+        $composeMode = Get-ComposeMode
+        if (-not $composeMode) { throw 'Docker Compose is unavailable. Restart Windows to complete Docker Desktop setup.' }
+        if ($composeMode -eq 'plugin') {
+            $backendImage = (& docker compose -f $compose images -q backend 2>$null)
+            $frontendImage = (& docker compose -f $compose images -q frontend 2>$null)
+        } else {
+            $backendImage = (& docker-compose -f $compose images -q backend 2>$null)
+            $frontendImage = (& docker-compose -f $compose images -q frontend 2>$null)
+        }
         if ($Rebuild -or -not $backendImage -or -not $frontendImage) {
             Write-Host 'Preparing images. The first launch can take a few minutes...' -ForegroundColor Cyan
-            Invoke-Docker compose -f $compose build --pull
+            Invoke-Compose -f $compose build --pull
         } else {
             Write-Host 'Reusing existing images for a fast startup.' -ForegroundColor Cyan
         }
 
         Write-Host 'Starting services and waiting for health checks...' -ForegroundColor Cyan
-        Invoke-Docker compose -f $compose up -d --wait --wait-timeout 180
+        Invoke-Compose -f $compose up -d --wait --wait-timeout 180
         Write-Host ''
         Write-Host 'Secure Messenger is ready: http://localhost:8080' -ForegroundColor Green
         Write-Host 'Logs: start-docker.bat -Logs    Stop: start-docker.bat -Stop'
@@ -101,8 +134,8 @@ try {
 } catch {
     Write-Host ''
     Write-Host "Startup failed: $($_.Exception.Message)" -ForegroundColor Red
-    if (Get-Command docker.exe -ErrorAction SilentlyContinue) {
-        & docker compose -f $compose logs --tail 60 2>$null
+    if ((Get-Command docker.exe -ErrorAction SilentlyContinue) -and (Test-DockerEngine) -and (Get-ComposeMode)) {
+        try { Invoke-Compose -f $compose logs --tail 60 } catch { }
     }
     exit 1
 }
