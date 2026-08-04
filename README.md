@@ -22,6 +22,8 @@ It automatically:
 
 Docker Desktop installation can request administrator approval. Windows may
 require one restart after enabling WSL 2; run `start-docker.bat` again after it.
+If Windows reports component-store corruption `14098`, the launcher runs the
+Microsoft-recommended DISM and SFC repair sequence before requesting a restart.
 
 Useful commands:
 

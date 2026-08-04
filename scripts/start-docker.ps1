@@ -56,6 +56,24 @@ function Test-DockerInstallation {
         (Test-Path (Join-Path $dockerPlugins 'docker-compose.exe'))
 }
 
+function Repair-WindowsComponentStore {
+    Write-Host ''
+    Write-Host 'Windows component store corruption (14098) detected.' -ForegroundColor Yellow
+    Write-Host 'Running the Microsoft-recommended DISM repair. This can take 10-30 minutes.' -ForegroundColor Yellow
+    & dism.exe /Online /Cleanup-Image /RestoreHealth
+    if ($LASTEXITCODE -ne 0) {
+        throw "DISM could not repair Windows (exit code $LASTEXITCODE). Use a matching Windows installation source or perform an in-place Windows repair."
+    }
+    Write-Host 'Checking protected system files with SFC...' -ForegroundColor Cyan
+    & sfc.exe /scannow
+    if ($LASTEXITCODE -ne 0) {
+        throw "SFC could not complete successfully (exit code $LASTEXITCODE)."
+    }
+    Write-Host ''
+    Write-Host 'Windows repair completed. Restart Windows, then run start-docker.bat again.' -ForegroundColor Green
+    exit 10
+}
+
 function Install-DockerDesktop {
     Write-Host 'Docker Desktop is missing or incomplete. Installing/repairing it now...' -ForegroundColor Yellow
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -90,7 +108,13 @@ function Install-DockerDesktop {
     }
     $process = Start-Process -FilePath $installer -ArgumentList 'install', '--accept-license', '--backend=wsl-2' -Wait -PassThru
     Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
-    if ($process.ExitCode -ne 0) { throw "Docker Desktop installation failed with exit code $($process.ExitCode). Approve the UAC prompt and try again." }
+    if ($process.ExitCode -ne 0) {
+        $adminInstallLog = 'C:\ProgramData\DockerDesktop\install-log-admin.txt'
+        if ((Test-Path $adminInstallLog) -and (Select-String -Path $adminInstallLog -Pattern '14098|0x80073712' -Quiet)) {
+            Repair-WindowsComponentStore
+        }
+        throw "Docker Desktop installation failed with exit code $($process.ExitCode). See C:\ProgramData\DockerDesktop\install-log-admin.txt."
+    }
     Refresh-DockerPath
     if (-not (Test-DockerInstallation)) {
         throw 'Docker Desktop installation did not complete. Approve the UAC prompt, restart Windows, and run start-docker.bat again.'
