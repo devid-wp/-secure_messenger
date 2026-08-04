@@ -33,3 +33,5 @@ the backend container.
 
 - Node.js 20 or newer
 - npm
+- Rust with the `wasm32-unknown-unknown` target
+- `wasm-bindgen-cli` 0.2.126

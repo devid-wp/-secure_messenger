@@ -32,6 +32,10 @@ service worker. On HTTPS deployments, Edge and Chrome can install it directly
 from the browser menu. An installed PWA receives its own Start menu entry and
 taskbar icon and does not require the BAT launcher afterward.
 
+The PWA runs pinned OpenMLS WebAssembly in a dedicated Worker. Its MLS state is
+AES-GCM encrypted in IndexedDB with a non-extractable WebCrypto key; it uses the
+same opaque MLS envelope transport as the Tauri client.
+
 ## Development
 
 ```powershell

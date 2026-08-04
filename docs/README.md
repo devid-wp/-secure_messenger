@@ -20,6 +20,7 @@
 7. [Политика backup/recovery локального vault](local-vault-backup-recovery.md)
 8. [Stage 5 implementation status](stage-5-progress.md)
 9. [Stage 6: stickers and encrypted media](stage-6-stickers-media.md)
+10. [PWA E2EE runtime](pwa-e2ee.md)
 10. [Stage 3: рабочие личные сообщения](stage-3-direct-messages.md)
 11. [Stage 4: группы](stage-4-groups.md)
 12. [Фундамент backend и миграций](foundation.md)

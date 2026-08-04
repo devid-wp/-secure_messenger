@@ -1,0 +1,55 @@
+name: PWA OpenMLS WASM
+
+on:
+  push:
+    paths:
+      - "frontend/src-wasm/**"
+      - "frontend/src/crypto/**"
+      - "frontend/src/App.jsx"
+      - "frontend/src-tauri/icons/service-worker.js"
+      - "frontend/Dockerfile"
+      - "frontend/nginx.conf"
+      - "frontend/package*.json"
+      - "frontend/scripts/build-mls-wasm.mjs"
+      - ".github/workflows/pwa-mls-wasm.yml"
+  pull_request:
+    paths:
+      - "frontend/src-wasm/**"
+      - "frontend/src/crypto/**"
+      - "frontend/src/App.jsx"
+      - "frontend/src-tauri/icons/service-worker.js"
+      - "frontend/Dockerfile"
+      - "frontend/nginx.conf"
+      - "frontend/package*.json"
+      - "frontend/scripts/build-mls-wasm.mjs"
+      - ".github/workflows/pwa-mls-wasm.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-wasm
+      - name: Install matching wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+      - name: Check formatting
+        working-directory: frontend/src-wasm
+        run: cargo fmt --check
+      - name: Compile OpenMLS for WASM
+        working-directory: frontend/src-wasm
+        run: cargo check --locked --target wasm32-unknown-unknown
+      - name: Build PWA
+        working-directory: frontend
+        run: npm ci && npm run build
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
