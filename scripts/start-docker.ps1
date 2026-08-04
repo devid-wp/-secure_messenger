@@ -78,23 +78,18 @@ function Install-DockerDesktop {
         }
         exit $elevated.ExitCode
     }
-    $installedBootstrap = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop Installer.exe'
     $downloadedInstaller = Join-Path $env:TEMP 'SecureMessenger-DockerDesktop-Installer.exe'
-    if (Test-Path $installedBootstrap) {
-        $installer = $installedBootstrap
-    } else {
-        $installer = $downloadedInstaller
-        $url = 'https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe'
-        Write-Host 'Downloading the official Docker Desktop installer...'
-        Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing
-    }
+    $installer = $downloadedInstaller
+    $url = 'https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe'
+    Write-Host 'Downloading the complete official Docker Desktop installer...'
+    Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing
     $signature = Get-AuthenticodeSignature -LiteralPath $installer
     if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Docker') {
-        if ($installer -eq $downloadedInstaller) { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
+        Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
         throw 'The Docker Desktop installer signature is not valid.'
     }
     $process = Start-Process -FilePath $installer -ArgumentList 'install', '--accept-license', '--backend=wsl-2' -Wait -PassThru
-    if ($installer -eq $downloadedInstaller) { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
+    Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
     if ($process.ExitCode -ne 0) { throw "Docker Desktop installation failed with exit code $($process.ExitCode). Approve the UAC prompt and try again." }
     Refresh-DockerPath
     if (-not (Test-DockerInstallation)) {
