@@ -115,6 +115,47 @@ class E2eeDeliveryApiTests(unittest.TestCase):
         self.assertEqual(base64.b64decode(first.json()[0]["key_package"]), package)
         self.assertEqual(second.json(), [])
 
+    def test_key_package_inventory_tracks_claims(self) -> None:
+        alice, _ = self.register_and_login("alice-inventory")
+        bob, _ = self.register_and_login("bob-inventory")
+        self.publish_identity(alice, 3)
+        self.publish_identity(bob, 4)
+        payload = {
+            "key_packages": [self.encoded(bytes([index]) * 64) for index in (5, 6)],
+            "cipher_suite": 1,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        }
+        published = self.client.post(
+            "/api/v1/e2ee/key-packages", headers=self.headers(bob), json=payload
+        )
+        self.assertEqual(published.status_code, 201, published.text)
+        before = self.client.get(
+            "/api/v1/e2ee/key-packages/status", headers=self.headers(bob)
+        )
+        self.assertEqual(before.json(), {"available": 2, "cipher_suite": 1})
+        self.client.post(
+            "/api/v1/e2ee/users/bob-inventory/key-packages/claim",
+            headers=self.headers(alice),
+        )
+        after = self.client.get(
+            "/api/v1/e2ee/key-packages/status", headers=self.headers(bob)
+        )
+        self.assertEqual(after.json(), {"available": 1, "cipher_suite": 1})
+
+    def test_unsupported_ciphersuite_is_rejected(self) -> None:
+        token, _ = self.register_and_login("wrong-suite")
+        self.publish_identity(token, 7)
+        response = self.client.post(
+            "/api/v1/e2ee/key-packages",
+            headers=self.headers(token),
+            json={
+                "key_packages": [self.encoded(bytes([8]) * 64)],
+                "cipher_suite": 2,
+                "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+
     def test_revoked_device_is_removed_from_identity_directory(self) -> None:
         alice, alice_device = self.register_and_login("alice")
         bob, _ = self.register_and_login("bob")
