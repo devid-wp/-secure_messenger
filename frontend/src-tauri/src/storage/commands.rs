@@ -9,6 +9,7 @@ use super::{
 };
 
 pub struct DesktopState {
+    paths: StoragePaths,
     vault: NativeVault,
     sessions: NativeSessionStore,
     #[allow(dead_code)]
@@ -19,10 +20,19 @@ impl DesktopState {
     pub fn new(app_data_dir: &Path) -> Result<Self, StorageError> {
         let paths = StoragePaths::new(app_data_dir)?;
         Ok(Self {
+            paths: paths.clone(),
             vault: NativeVault::new(paths.clone()),
             sessions: NativeSessionStore::new(paths.clone())?,
             mls_state: MlsStateStore::new(paths),
         })
+    }
+
+    pub fn export_backup(&self, destination: &Path) -> Result<String, StorageError> {
+        super::backup::export(&self.paths, destination)
+    }
+
+    pub fn restore_backup(&self, source: &Path, recovery_key: &str) -> Result<(), StorageError> {
+        super::backup::restore(&self.paths, source, recovery_key)
     }
 
     pub fn lock(&self) -> Result<(), StorageError> {
@@ -84,6 +94,25 @@ pub fn session_current(state: State<'_, DesktopState>) -> Result<Option<SessionS
 #[tauri::command]
 pub fn session_clear(state: State<'_, DesktopState>) -> Result<(), String> {
     state.lock().map_err(command_error)
+}
+
+#[tauri::command]
+pub fn vault_backup(
+    state: State<'_, DesktopState>,
+    destination: String,
+) -> Result<String, String> {
+    state.export_backup(Path::new(&destination)).map_err(command_error)
+}
+
+#[tauri::command]
+pub fn vault_restore(
+    state: State<'_, DesktopState>,
+    source: String,
+    recovery_key: String,
+) -> Result<(), String> {
+    state
+        .restore_backup(Path::new(&source), &recovery_key)
+        .map_err(command_error)
 }
 
 #[cfg(test)]

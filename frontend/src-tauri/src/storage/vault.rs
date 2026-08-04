@@ -65,13 +65,22 @@ impl MasterKeyStore {
         }
     }
 
-    fn load(&self) -> Result<MasterKey, StorageError> {
+    pub(crate) fn load(&self) -> Result<MasterKey, StorageError> {
         let envelope = fs::read(self.paths.master_key())?;
         let plaintext = dpapi::unprotect(decode_envelope(&envelope)?)?;
         let bytes: [u8; MASTER_KEY_BYTES] = plaintext
             .try_into()
             .map_err(|_| StorageError::InvalidData("master key length is invalid"))?;
         Ok(MasterKey::from_bytes(bytes))
+    }
+
+    pub(crate) fn restore(&self, key: &[u8]) -> Result<(), StorageError> {
+        let bytes: [u8; MASTER_KEY_BYTES] = key
+            .try_into()
+            .map_err(|_| StorageError::InvalidData("master key length is invalid"))?;
+        let protected = dpapi::protect(&bytes)?;
+        let envelope = encode_envelope(&protected)?;
+        atomic::write(&self.paths.master_key(), &envelope, WriteMode::CreateNew)
     }
 
     fn create(&self) -> Result<MasterKey, StorageError> {
