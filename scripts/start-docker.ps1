@@ -50,35 +50,61 @@ function Refresh-DockerPath {
     }
 }
 
+function Test-DockerInstallation {
+    return (Test-Path $dockerDesktop) -and
+        (Test-Path 'HKLM:\SOFTWARE\Docker Inc.\Docker Desktop') -and
+        (Test-Path (Join-Path $dockerPlugins 'docker-compose.exe'))
+}
+
 function Install-DockerDesktop {
-    Write-Host 'Docker Desktop is missing. Installing it now...' -ForegroundColor Yellow
-    $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
-    if ($winget) {
-        & $winget.Source install --exact --id Docker.DockerDesktop --accept-package-agreements --accept-source-agreements --silent
-        if ($LASTEXITCODE -ne 0) { throw "Docker Desktop installation failed with exit code $LASTEXITCODE." }
+    Write-Host 'Docker Desktop is missing or incomplete. Installing/repairing it now...' -ForegroundColor Yellow
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Write-Host 'Windows administrator approval is required once.' -ForegroundColor Yellow
+        $elevatedArguments = @(
+            '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-File', "`"$PSCommandPath`""
+        )
+        if ($Rebuild) { $elevatedArguments += '-Rebuild' }
+        if ($Status) { $elevatedArguments += '-Status' }
+        if ($Logs) { $elevatedArguments += '-Logs' }
+        if ($Stop) { $elevatedArguments += '-Stop' }
+        if ($NoBrowser) { $elevatedArguments += '-NoBrowser' }
+        try {
+            $elevated = Start-Process powershell.exe -ArgumentList $elevatedArguments -Verb RunAs -Wait -PassThru
+        } catch {
+            throw 'Administrator approval was cancelled. Run start-docker.bat again and approve the UAC prompt.'
+        }
+        exit $elevated.ExitCode
+    }
+    $installedBootstrap = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop Installer.exe'
+    $downloadedInstaller = Join-Path $env:TEMP 'SecureMessenger-DockerDesktop-Installer.exe'
+    if (Test-Path $installedBootstrap) {
+        $installer = $installedBootstrap
     } else {
-        $installer = Join-Path $env:TEMP 'SecureMessenger-DockerDesktop-Installer.exe'
+        $installer = $downloadedInstaller
         $url = 'https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe'
         Write-Host 'Downloading the official Docker Desktop installer...'
         Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing
-        $signature = Get-AuthenticodeSignature -LiteralPath $installer
-        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Docker') {
-            Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
-            throw 'The Docker Desktop installer signature is not valid.'
-        }
-        $process = Start-Process -FilePath $installer -ArgumentList 'install', '--accept-license', '--backend=wsl-2' -Verb RunAs -Wait -PassThru
-        Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
-        if ($process.ExitCode -ne 0) { throw "Docker Desktop installation failed with exit code $($process.ExitCode)." }
     }
+    $signature = Get-AuthenticodeSignature -LiteralPath $installer
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Docker') {
+        if ($installer -eq $downloadedInstaller) { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
+        throw 'The Docker Desktop installer signature is not valid.'
+    }
+    $process = Start-Process -FilePath $installer -ArgumentList 'install', '--accept-license', '--backend=wsl-2' -Wait -PassThru
+    if ($installer -eq $downloadedInstaller) { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
+    if ($process.ExitCode -ne 0) { throw "Docker Desktop installation failed with exit code $($process.ExitCode). Approve the UAC prompt and try again." }
     Refresh-DockerPath
-    if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) {
-        throw 'Docker Desktop was installed, but Windows must be restarted. Restart and run start-docker.bat again.'
+    if (-not (Test-DockerInstallation)) {
+        throw 'Docker Desktop installation did not complete. Approve the UAC prompt, restart Windows, and run start-docker.bat again.'
     }
 }
 
 function Wait-DockerEngine {
     Refresh-DockerPath
-    if (-not (Get-Command docker.exe -ErrorAction SilentlyContinue)) { Install-DockerDesktop }
+    if (-not (Test-DockerInstallation)) { Install-DockerDesktop }
     if (Test-DockerEngine) { return }
     if (-not (Test-Path $dockerDesktop)) { throw 'Docker Desktop installation is incomplete.' }
     Write-Host 'Starting Docker Desktop...' -ForegroundColor Cyan
