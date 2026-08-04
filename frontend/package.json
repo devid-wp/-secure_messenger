@@ -9,7 +9,8 @@
     "desktop:build": "tauri build",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "build": "vite build",
+    "wasm:build": "node scripts/build-mls-wasm.mjs",
+    "build": "npm run wasm:build && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

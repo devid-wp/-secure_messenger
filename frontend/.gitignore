@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 src-tauri/target
+src-wasm/target
+src/crypto/wasm-generated
 *.local
 
 .DS_Store
