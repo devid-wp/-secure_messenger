@@ -8,6 +8,7 @@ import {
   saveNativeSession,
 } from './crypto/desktopBridge'
 import { synchronizeDeviceMls } from './crypto/e2eeBootstrap'
+import { lockMlsRuntime } from './crypto/mlsRuntimeBridge'
 import './App.css'
 
 function App() {
@@ -135,6 +136,7 @@ function App() {
       }
     }
     try {
+      await lockMlsRuntime()
       if (desktop) {
         await clearNativeSession()
       } else {
@@ -151,11 +153,11 @@ function App() {
   }
 
   useEffect(() => {
-    if (!desktop || !token || !deviceId) return
+    if (!token || !deviceId) return
     synchronizeDeviceMls(token, deviceId).catch(() => {
-      // ChatApp keeps sending disabled while native crypto reports unavailable.
+      // ChatApp keeps sending disabled until its MLS runtime is ready.
     })
-  }, [desktop, deviceId, token])
+  }, [deviceId, token])
 
   if (!sessionReady) {
     return <div className="app" aria-busy="true" />

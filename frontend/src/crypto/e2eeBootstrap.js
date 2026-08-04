@@ -1,4 +1,4 @@
-import { initializeNativeMls, isDesktopRuntime } from './desktopBridge'
+import { initializeMls, mlsRuntimeAvailable } from './mlsRuntimeBridge'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 export const KEY_PACKAGE_TARGET = 20
@@ -23,12 +23,12 @@ async function api(path, token, options = {}) {
 }
 
 export async function synchronizeDeviceMls(token, deviceId) {
-  if (!isDesktopRuntime() || !token || !deviceId) return null
+  if (!mlsRuntimeAvailable() || !token || !deviceId) return null
 
   const inventory = await api('/key-packages/status', token)
   if (inventory.cipher_suite !== 1) throw new Error('Unsupported MLS ciphersuite')
   const missing = Math.max(0, KEY_PACKAGE_TARGET - inventory.available)
-  const material = await initializeNativeMls(deviceId, missing)
+  const material = await initializeMls(deviceId, missing)
 
   const identity = await api('/identity', token, {
     method: 'PUT',
