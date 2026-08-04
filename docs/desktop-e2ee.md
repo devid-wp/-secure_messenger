@@ -39,7 +39,10 @@ and an authenticated inventory endpoint. The client targets 20 available
 packages and publishes only the deficit after login and token refresh. New
 packages expire after seven days.
 
-The current milestone does **not** encrypt messages and is not an E2EE release.
+The desktop client encrypts text messages as MLS private application messages.
+Welcome, Commit, Remove and Update processing stays in Rust, and FastAPI sees
+only opaque TLS-serialized MLS wire data. The browser build fails closed for
+sending because it has no native key boundary.
 
 The active React application still receives its bearer token in memory because
 the current HTTP and WebSocket clients run in the WebView. The improvement in
@@ -64,10 +67,8 @@ Run the desktop development shell from `frontend`:
 npm run desktop:dev
 ```
 
-## Next cryptographic milestone
+## Remaining cryptographic release gates
 
-Create a two-device MLS group, process Welcome messages and round-trip one
-application message. FastAPI must receive only serialized MLS protocol data.
-
-Do not add a home-grown AES fallback and do not expose private key material over
-Tauri IPC.
+Encrypted attachment-key wrapping, safety-number UI, fuzzing and independent
+review remain required before the whole product can be labelled E2EE. Do not
+add a JavaScript cryptographic fallback or expose private key material over IPC.

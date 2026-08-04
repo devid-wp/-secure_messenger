@@ -170,3 +170,58 @@ class E2eeDeliveryApiTests(unittest.TestCase):
             headers=self.headers(bob),
         )
         self.assertEqual(directory.status_code, 404)
+
+    def test_mls_envelopes_are_opaque_targeted_and_idempotent(self) -> None:
+        alice, alice_device = self.register_and_login("alice-envelope")
+        bob, bob_device = self.register_and_login("bob-envelope")
+        self.publish_identity(alice, 11)
+        self.publish_identity(bob, 12)
+        chat_response = self.client.post(
+            "/api/v1/chats/dm",
+            headers=self.headers(alice),
+            json={"login": "bob-envelope"},
+        )
+        self.assertEqual(chat_response.status_code, 200, chat_response.text)
+        chat_id = chat_response.json()["id"]
+        ciphertext = b"opaque-openmls-wire-data"
+        body = {
+            "epoch": 1,
+            "content_type": "application",
+            "payload": self.encoded(ciphertext),
+        }
+        first = self.client.post(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes",
+            headers=self.headers(alice),
+            json=body,
+        )
+        duplicate = self.client.post(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes",
+            headers=self.headers(alice),
+            json=body,
+        )
+        self.assertEqual(first.status_code, 201, first.text)
+        self.assertEqual(duplicate.json()["id"], first.json()["id"])
+        inbox = self.client.get(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes",
+            headers=self.headers(bob),
+        )
+        self.assertEqual(len(inbox.json()), 1)
+        self.assertEqual(base64.b64decode(inbox.json()[0]["payload"]), ciphertext)
+
+        welcome = self.client.post(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes",
+            headers=self.headers(alice),
+            json={
+                "epoch": 1,
+                "content_type": "welcome",
+                "payload": self.encoded(b"opaque-welcome"),
+                "recipient_device_id": bob_device,
+            },
+        )
+        self.assertEqual(welcome.status_code, 201, welcome.text)
+        alice_inbox = self.client.get(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes",
+            headers=self.headers(alice),
+        ).json()
+        self.assertFalse(any(item["content_type"] == "welcome" for item in alice_inbox))
+        self.assertNotEqual(alice_device, bob_device)

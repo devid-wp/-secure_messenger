@@ -28,21 +28,37 @@ No custom cryptographic primitive may be implemented in JavaScript or Python.
 - Revoked devices disappear from discovery and cannot authenticate.
 - The server stores no private identity key or KeyPackage private material.
 
+## Implemented native message path
+
+- Native OpenMLS group creation and deterministic per-chat GroupId.
+- Multi-device Add Commit and targeted Welcome delivery.
+- Persistent epoch transitions for Add, Remove and self Update commits.
+- Private MLS application messages; plaintext crosses only the Tauri IPC
+  boundary between the React UI and native OpenMLS.
+- Opaque server-side `mls_envelopes` storage. The delivery service stores MLS
+  wire bytes, epoch and routing metadata, never application plaintext.
+- OpenMLS replay/duplicate rejection and out-of-order application processing.
+- DPAPI-protected local application cache keyed by ciphertext hash, so consumed
+  generations remain readable after restart without renderer persistence.
+- Device revocation emits and publishes an MLS Remove Commit for every local
+  group containing the revoked device.
+- Automatic self Update Commit after every 100 sent application messages.
+- The legacy WebSocket plaintext sender and plaintext edit endpoint fail closed.
+- Browser builds can display the UI but cannot send messages.
+
 ## Security gates still open
 
 The product MUST NOT claim working E2EE until all of these are complete:
 
 - pinned OpenMLS Rust/WASM wrapper and reproducible browser build;
 - encrypted local MLS state isolated in a Web Worker;
-- MLS group creation, Welcome processing, Commit handling, and application
-  encryption in Chromium and Firefox;
-- opaque ciphertext message storage replacing server-visible content;
-- regular Update/Commit scheduling for forward secrecy and PCS;
+- browser/WASM support (desktop Tauri is the supported E2EE runtime);
 - encrypted attachments and encrypted backup export;
 - safety number and QR verification;
 - device-change warnings and group epoch updates after revocation;
 - RFC/OpenMLS known-answer vectors, replay/reorder/duplicate tests, fuzzing, and
   an independent review of the Rust/WASM boundary.
 
-The current frontend and existing message transport still send plaintext. This
-is an intentional migration boundary, not an E2EE release.
+Text messages now use only the native MLS envelope transport. Attachments keep
+their separately documented encrypted-storage mode and are not yet covered by
+the MLS message claim. Independent review and fuzzing remain release gates.
