@@ -104,10 +104,22 @@ Install Docker Desktop, open PowerShell in the repository root, and run:
 .\start.ps1
 ```
 
-You can also double-click `start-docker.bat`, or run it from Command Prompt:
+For the fastest and most reproducible local start, double-click
+`start-docker.bat`. The first run builds the images; later runs reuse them,
+start in the background, wait for all health checks, and open the application
+automatically.
 
 ```bat
 start-docker.bat
+```
+
+Launcher maintenance commands:
+
+```bat
+start-docker.bat -Status
+start-docker.bat -Logs
+start-docker.bat -Stop
+start-docker.bat -Rebuild
 ```
 
 Alternatively, use Docker Compose directly:
@@ -122,9 +134,9 @@ The services become available at:
 - Backend API: `http://localhost:8000`
 - OpenAPI documentation: `http://localhost:8000/docs`
 
-The first startup builds both applications, waits for PostgreSQL and Redis, and
-applies all Alembic migrations automatically. Later startups reuse the images
-and persistent database volumes. Stop the stack with `Ctrl+C`.
+The first startup builds both applications, waits for PostgreSQL, Redis, MinIO,
+the API and frontend, and applies all Alembic migrations automatically. Later
+startups reuse the images and persistent database volumes.
 
 To stop background containers:
 
