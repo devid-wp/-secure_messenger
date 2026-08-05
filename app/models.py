@@ -264,10 +264,6 @@ class Chat(Base):
     __table_args__ = (
         CheckConstraint("type IN ('dm', 'group')", name="type"),
         CheckConstraint(
-            "(type = 'dm' AND name IS NULL) OR type = 'group'",
-            name="dm_has_no_name",
-        ),
-        CheckConstraint(
             "history_visibility IN ('all', 'since_join')",
             name="history_visibility",
         ),
@@ -275,7 +271,6 @@ class Chat(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     type: Mapped[str] = mapped_column(String(16), nullable=False)
-    name: Mapped[Optional[str]] = mapped_column(String(255))
     avatar_url: Mapped[Optional[str]] = mapped_column(String(2048))
     history_visibility: Mapped[str] = mapped_column(
         String(16),
@@ -287,12 +282,6 @@ class Chat(Base):
         String(64),
         unique=True,
         index=True,
-    )
-    next_message_seq: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-        default=1,
-        server_default="1",
     )
     created_by_user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"),
@@ -306,10 +295,6 @@ class Chat(Base):
 
     creator: Mapped[User] = relationship(foreign_keys=[created_by_user_id])
     members: Mapped[list["ChatMember"]] = relationship(
-        back_populates="chat",
-        cascade="all, delete-orphan",
-    )
-    messages: Mapped[list["Message"]] = relationship(
         back_populates="chat",
         cascade="all, delete-orphan",
     )
@@ -523,126 +508,6 @@ class StickerPackSubscription(Base):
     user: Mapped[User] = relationship()
 
 
-class Message(Base):
-    __tablename__ = "messages"
-    __table_args__ = (
-        CheckConstraint(
-            "(deleted_at IS NOT NULL AND content = '') OR "
-            "(deleted_at IS NULL AND kind IN ('text', 'system') "
-            "AND length(content) BETWEEN 1 AND 16384) OR "
-            "(deleted_at IS NULL AND kind = 'sticker' AND content = '') OR "
-            "(deleted_at IS NULL AND kind IN ('image', 'file') "
-            "AND length(content) BETWEEN 0 AND 4096)",
-            name="content_length",
-        ),
-        CheckConstraint(
-            "kind IN ('text', 'sticker', 'image', 'file', 'system')",
-            name="kind",
-        ),
-        CheckConstraint(
-            "(kind = 'sticker' AND sticker_id IS NOT NULL "
-            "AND attachment_id IS NULL) OR "
-            "(kind IN ('image', 'file') AND attachment_id IS NOT NULL "
-            "AND sticker_id IS NULL) OR "
-            "(kind IN ('text', 'system') AND attachment_id IS NULL "
-            "AND sticker_id IS NULL)",
-            name="typed_payload",
-        ),
-        Index("ix_messages_chat_timestamp", "chat_id", "timestamp", "id"),
-        UniqueConstraint(
-            "sender_user_id",
-            "client_id",
-            name="uq_messages_sender_client_id",
-        ),
-        UniqueConstraint(
-            "chat_id",
-            "server_seq",
-            name="uq_messages_chat_server_seq",
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    chat_id: Mapped[int] = mapped_column(
-        ForeignKey("chats.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    sender_user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    kind: Mapped[str] = mapped_column(
-        String(16),
-        nullable=False,
-        default="text",
-        server_default="text",
-    )
-    attachment_id: Mapped[Optional[str]] = mapped_column(
-        ForeignKey("media_objects.id", ondelete="RESTRICT"),
-    )
-    sticker_id: Mapped[Optional[str]] = mapped_column(
-        ForeignKey("stickers.id", ondelete="RESTRICT"),
-    )
-    key_envelope: Mapped[Optional[str]] = mapped_column(Text)
-    client_id: Mapped[Optional[str]] = mapped_column(String(36))
-    server_seq: Mapped[int] = mapped_column(Integer, nullable=False)
-    reply_to_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("messages.id", ondelete="RESTRICT")
-    )
-    timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-    edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-
-    chat: Mapped[Chat] = relationship(back_populates="messages")
-    sender: Mapped[User] = relationship()
-    reply_to: Mapped[Optional["Message"]] = relationship(
-        remote_side="Message.id",
-        foreign_keys=[reply_to_id],
-    )
-    attachment: Mapped[Optional[MediaObject]] = relationship(
-        foreign_keys=[attachment_id]
-    )
-    sticker: Mapped[Optional[Sticker]] = relationship(foreign_keys=[sticker_id])
-    receipts: Mapped[list["MessageReceipt"]] = relationship(
-        back_populates="message",
-        cascade="all, delete-orphan",
-    )
-
-
-class MessageReceipt(Base):
-    __tablename__ = "message_receipts"
-    __table_args__ = (
-        CheckConstraint(
-            "status IN ('delivered', 'read')",
-            name="status",
-        ),
-    )
-
-    message_id: Mapped[int] = mapped_column(
-        ForeignKey("messages.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        primary_key=True,
-        index=True,
-    )
-    status: Mapped[str] = mapped_column(String(16), nullable=False)
-    delivered_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-    read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-
-    message: Mapped[Message] = relationship(back_populates="receipts")
-    user: Mapped[User] = relationship()
-
-
 class MlsEnvelope(Base):
     """Opaque MLS wire data. The server never parses or decrypts ``payload``."""
 
@@ -656,6 +521,10 @@ class MlsEnvelope(Base):
         CheckConstraint("length(payload) BETWEEN 1 AND 1048576", name="payload_size"),
         UniqueConstraint("sender_device_id", "message_hash", name="uq_mls_envelope_sender_hash"),
         Index("ix_mls_envelopes_chat_id_id", "chat_id", "id"),
+    )
+    chat_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"),
+        index=True,
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

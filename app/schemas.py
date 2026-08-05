@@ -143,7 +143,6 @@ class ChatPeer(BaseModel):
 class ChatResponse(BaseModel):
     id: int
     type: str
-    name: str | None
     created_by: str
     created_at: datetime
     members: list[str]
@@ -151,19 +150,12 @@ class ChatResponse(BaseModel):
     avatar_url: str | None
     history_visibility: str
     peer: ChatPeer | None = None
-    last_message: "ChatLastMessage | None" = None
-    unread_count: int = 0
-
-
-class ChatLastMessage(BaseModel):
-    sender: str
-    kind: str
-    content: str
-    timestamp: datetime
+    last_envelope_id: int | None = None
 
 
 class GroupCreateRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=255)
+    model_config = ConfigDict(extra="forbid")
+
     avatar_url: str | None = Field(default=None, max_length=2048)
     member_logins: list[str] = Field(default_factory=list, max_length=99)
     history_visibility: str = Field(
@@ -173,7 +165,8 @@ class GroupCreateRequest(BaseModel):
 
 
 class GroupUpdateRequest(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=255)
+    model_config = ConfigDict(extra="forbid")
+
     avatar_url: str | None = Field(default=None, max_length=2048)
     history_visibility: str | None = Field(
         default=None,
@@ -193,7 +186,6 @@ class GroupInvitationRequest(BaseModel):
 class GroupInvitationResponse(BaseModel):
     id: str
     chat_id: int
-    group_name: str
     inviter: str
     invitee: str
     status: str
@@ -203,36 +195,6 @@ class GroupInvitationResponse(BaseModel):
 
 class GroupOwnerTransferRequest(BaseModel):
     login: str = Field(min_length=1, max_length=64)
-
-
-class MessageResponse(BaseModel):
-    id: int
-    chat_id: int
-    sender: str
-    content: str
-    kind: str
-    client_id: str | None
-    server_seq: int
-    status: str
-    reply_to_server_seq: int | None
-    reply_to_sender: str | None
-    reply_to_content: str | None
-    timestamp: datetime
-    edited_at: datetime | None
-    deleted_at: datetime | None
-    attachment: "MediaObjectResponse | None" = None
-    sticker: "StickerResponse | None" = None
-    key_envelope: str | None = None
-
-
-class MessagePage(BaseModel):
-    items: list[MessageResponse]
-    next_cursor: str | None
-    has_more: bool
-
-
-class MessageEditRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=16384)
 
 
 class MediaObjectResponse(BaseModel):

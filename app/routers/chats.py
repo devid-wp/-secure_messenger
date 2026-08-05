@@ -20,7 +20,6 @@ from app.schemas import (
     GroupUpdateRequest,
 )
 from app.services.serializers import serialize_chat, serialize_chat_summary
-from app.services.system_messages import append_system_message
 from app.services.uploads import save_image, validate_avatar_url
 
 
@@ -38,7 +37,6 @@ def _serialize_invitation(invitation: ChatInvitation) -> dict:
     return {
         "id": invitation.id,
         "chat_id": invitation.chat_id,
-        "group_name": invitation.chat.name,
         "inviter": invitation.inviter.login,
         "invitee": invitation.invitee.login,
         "status": invitation.status,
@@ -134,7 +132,6 @@ async def create_direct_chat(
     if chat is None:
         chat = Chat(
             type="dm",
-            name=None,
             direct_key=direct_key,
             created_by_user_id=current_user.id,
             members=[
@@ -184,9 +181,6 @@ async def create_group(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
-    name = request_body.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Group name cannot be blank")
     requested_logins = {
         login.strip() for login in request_body.member_logins if login.strip()
     }
@@ -204,7 +198,6 @@ async def create_group(
         raise HTTPException(status_code=404, detail="One or more users not found")
     group = Chat(
         type="group",
-        name=name,
         avatar_url=validate_avatar_url(request_body.avatar_url),
         history_visibility=request_body.history_visibility,
         created_by_user_id=current_user.id,
@@ -267,7 +260,7 @@ async def add_group_member(
                 chat_id=chat_id,
                 user_id=user.id,
                 role=request_body.role,
-                history_from_seq=group.next_message_seq,
+                history_from_seq=1,
             )
         )
         event_content = f"{current_user.login} added {user.login} to the group"
@@ -279,16 +272,7 @@ async def add_group_member(
             f"{current_user.login} changed {user.login}'s role "
             f"to {request_body.role}"
         )
-    if event_content is None:
-        await session.commit()
-    else:
-        await append_system_message(
-            request,
-            session,
-            chat_id=chat_id,
-            actor_user_id=current_user.id,
-            content=event_content,
-        )
+    await session.commit()
     group = await session.scalar(
         select(Chat).where(Chat.id == chat_id).options(*_chat_load_options())
     )
@@ -315,13 +299,7 @@ async def remove_group_member(
     if membership.role == "admin" and actor.role != "owner":
         raise HTTPException(status_code=403, detail="Only owner can remove admins")
     await session.delete(membership)
-    await append_system_message(
-        request,
-        session,
-        chat_id=chat_id,
-        actor_user_id=current_user.id,
-        content=f"{current_user.login} removed {user.login} from the group",
-    )
+    await session.commit()
 
 
 @router.delete("/groups/{chat_id}/leave", status_code=204)
@@ -343,13 +321,7 @@ async def leave_group(
             detail="Transfer ownership before leaving the group",
         )
     await session.delete(membership)
-    await append_system_message(
-        request,
-        session,
-        chat_id=chat_id,
-        actor_user_id=current_user.id,
-        content=f"{current_user.login} left the group",
-    )
+    await session.commit()
 
 
 @router.post("/groups/{chat_id}/owner", response_model=ChatResponse)
@@ -384,16 +356,7 @@ async def transfer_group_ownership(
         raise HTTPException(status_code=409, detail="User already owns the group")
     actor.role = "admin"
     target.role = "owner"
-    await append_system_message(
-        request,
-        session,
-        chat_id=chat_id,
-        actor_user_id=current_user.id,
-        content=(
-            f"{current_user.login} transferred group ownership "
-            f"to {target_user.login}"
-        ),
-    )
+    await session.commit()
     group = await session.scalar(
         select(Chat).where(Chat.id == chat_id).options(*_chat_load_options())
     )
@@ -512,17 +475,11 @@ async def accept_group_invitation(
                 chat_id=invitation.chat_id,
                 user_id=current_user.id,
                 role="member",
-                history_from_seq=group.next_message_seq,
+                history_from_seq=1,
             )
         )
     invitation.status = "accepted"
-    await append_system_message(
-        request,
-        session,
-        chat_id=invitation.chat_id,
-        actor_user_id=current_user.id,
-        content=f"{current_user.login} joined the group",
-    )
+    await session.commit()
     group = await session.scalar(
         select(Chat)
         .where(Chat.id == invitation.chat_id)
@@ -548,13 +505,6 @@ async def update_group(
     if membership.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     changes: list[str] = []
-    if request_body.name is not None:
-        previous_name = group.name
-        group.name = request_body.name.strip()
-        if not group.name:
-            raise HTTPException(status_code=400, detail="Group name cannot be blank")
-        if group.name != previous_name:
-            changes.append(f"renamed the group to {group.name}")
     if "avatar_url" in request_body.model_fields_set:
         group.avatar_url = validate_avatar_url(request_body.avatar_url)
         changes.append("updated the group avatar")
@@ -571,16 +521,7 @@ async def update_group(
                 if request_body.history_visibility == "all"
                 else "limited new members to history since joining"
             )
-    if changes:
-        await append_system_message(
-            request,
-            session,
-            chat_id=chat_id,
-            actor_user_id=current_user.id,
-            content=f"{current_user.login} " + " and ".join(changes),
-        )
-    else:
-        await session.commit()
+    await session.commit()
     group = await session.scalar(
         select(Chat).where(Chat.id == chat_id).options(*_chat_load_options())
     )
@@ -601,13 +542,7 @@ async def upload_group_avatar(
     group.avatar_url = await save_image(
         avatar, request.app.state.settings.upload_dir
     )
-    await append_system_message(
-        request,
-        session,
-        chat_id=chat_id,
-        actor_user_id=current_user.id,
-        content=f"{current_user.login} updated the group avatar",
-    )
+    await session.commit()
     group = await session.scalar(
         select(Chat).where(Chat.id == chat_id).options(*_chat_load_options())
     )

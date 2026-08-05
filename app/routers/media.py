@@ -27,7 +27,6 @@ from app.dependencies import get_current_user, get_db
 from app.models import (
     ChatMember,
     MediaObject,
-    Message,
     Sticker,
     StickerPack,
     StickerPackSubscription,
@@ -155,7 +154,7 @@ def _validate_nonce(value: str) -> str:
 async def upload_encrypted_attachment(
     request: Request,
     ciphertext: UploadFile = File(),
-    plaintext_content_type: str = Form(min_length=1, max_length=128),
+    chat_id: int = Form(ge=1),
     cipher: str = Form(pattern=r"^AES-256-GCM$"),
     nonce: str = Form(min_length=16, max_length=24),
     width: int | None = Form(default=None, ge=1, le=4096),
@@ -163,6 +162,8 @@ async def upload_encrypted_attachment(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
+    if await session.get(ChatMember, (chat_id, current_user.id)) is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
     if (width is None) != (height is None):
         raise HTTPException(
             status_code=422,
@@ -176,10 +177,11 @@ async def upload_encrypted_attachment(
     media = MediaObject(
         id=media_id,
         owner_user_id=current_user.id,
+        chat_id=chat_id,
         purpose="attachment",
         object_key=object_key,
         storage_backend=storage.backend_name,
-        content_type=plaintext_content_type,
+        content_type="application/octet-stream",
         size_bytes=len(content),
         sha256=hashlib.sha256(content).hexdigest(),
         is_encrypted=True,
@@ -210,17 +212,9 @@ async def download_media(
         raise HTTPException(status_code=404, detail="Media not found")
     allowed = media.owner_user_id == current_user.id
     if media.purpose == "attachment" and not allowed:
-        allowed = bool(
-            await session.scalar(
-                select(
-                    exists().where(
-                        Message.attachment_id == media.id,
-                        ChatMember.chat_id == Message.chat_id,
-                        ChatMember.user_id == current_user.id,
-                    )
-                )
-            )
-        )
+        allowed = media.chat_id is not None and await session.get(
+            ChatMember, (media.chat_id, current_user.id)
+        ) is not None
     if media.purpose == "sticker" and not allowed:
         allowed = bool(
             await session.scalar(
