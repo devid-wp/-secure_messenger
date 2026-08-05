@@ -5,9 +5,9 @@
 Версия набора документов: **1.0-draft.1**
 Дата фиксации: **2026-07-26**
 
-Эти документы задают границы продукта и модель безопасности до следующего
-расширения схемы БД. Текущая реализация после этапа 0 всё ещё хранит сообщения
-в открытом виде и **не соответствует** описанной здесь модели E2EE.
+Эти документы задают границы продукта и модель безопасности. Текущая схема
+хранит сообщения только как opaque MLS envelopes; прежнее plaintext-хранилище
+удалено миграцией `20260805_20`.
 
 ## Нормативные документы
 
@@ -21,9 +21,10 @@
 8. [Stage 5 implementation status](stage-5-progress.md)
 9. [Stage 6: stickers and encrypted media](stage-6-stickers-media.md)
 10. [PWA E2EE runtime](pwa-e2ee.md)
-10. [Stage 3: рабочие личные сообщения](stage-3-direct-messages.md)
-11. [Stage 4: группы](stage-4-groups.md)
-12. [Фундамент backend и миграций](foundation.md)
+11. [Backend opaque-storage boundary](backend-opaque-storage.md)
+12. [Stage 3: рабочие личные сообщения](stage-3-direct-messages.md)
+13. [Stage 4: группы](stage-4-groups.md)
+14. [Фундамент backend и миграций](foundation.md)
 
 Слова **MUST**, **MUST NOT**, **SHOULD** и **MAY** обозначают обязательное,
 запрещённое, рекомендуемое и необязательное поведение.

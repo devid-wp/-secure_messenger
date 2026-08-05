@@ -37,6 +37,8 @@ No custom cryptographic primitive may be implemented in JavaScript or Python.
   native Rust and the PWA invokes OpenMLS WASM in a dedicated Web Worker.
 - Opaque server-side `mls_envelopes` storage. The delivery service stores MLS
   wire bytes, epoch and routing metadata, never application plaintext.
+- Migration `20260805_20` removes the legacy `messages` and
+  `message_receipts` tables and the server-readable group-name column.
 - OpenMLS replay/duplicate rejection and out-of-order application processing.
 - DPAPI protects desktop state; the PWA uses an AES-GCM encrypted IndexedDB
   envelope and a non-extractable WebCrypto key. Both caches are keyed by

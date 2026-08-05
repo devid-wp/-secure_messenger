@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -16,13 +17,13 @@ from tests.test_foundation import run_migrations, sqlite_async_url
 class E2eeDeliveryApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
-        database_path = Path(self.temporary_directory.name) / "e2ee.db"
-        run_migrations(database_path)
+        self.database_path = Path(self.temporary_directory.name) / "e2ee.db"
+        run_migrations(self.database_path)
         self.client_context = TestClient(
             create_app(
                 Settings(
                     environment="test",
-                    database_url=sqlite_async_url(database_path),
+                    database_url=sqlite_async_url(self.database_path),
                 )
             )
         )
@@ -225,3 +226,42 @@ class E2eeDeliveryApiTests(unittest.TestCase):
         ).json()
         self.assertFalse(any(item["content_type"] == "welcome" for item in alice_inbox))
         self.assertNotEqual(alice_device, bob_device)
+
+    def test_schema_has_no_plaintext_messages_receipts_or_group_names(self) -> None:
+        with sqlite3.connect(self.database_path) as connection:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            chat_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(chats)")
+            }
+            media_columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(media_objects)")
+            }
+        self.assertNotIn("messages", tables)
+        self.assertNotIn("message_receipts", tables)
+        self.assertNotIn("name", chat_columns)
+        self.assertNotIn("next_message_seq", chat_columns)
+        self.assertIn("chat_id", media_columns)
+
+    def test_group_name_is_rejected_by_routing_api(self) -> None:
+        token, _ = self.register_and_login("opaque-group-owner")
+        rejected = self.client.post(
+            "/api/v1/chats/groups",
+            headers=self.headers(token),
+            json={"name": "server must not parse this"},
+        )
+        created = self.client.post(
+            "/api/v1/chats/groups",
+            headers=self.headers(token),
+            json={},
+        )
+        self.assertEqual(rejected.status_code, 422, rejected.text)
+        self.assertEqual(created.status_code, 201, created.text)
+        self.assertNotIn("name", created.json())
+        self.assertNotIn("last_message", created.json())
+        self.assertNotIn("unread_count", created.json())

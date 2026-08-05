@@ -122,7 +122,7 @@ class FoundationMigrationTests(unittest.TestCase):
                 connection.execute(
                     "SELECT version_num FROM alembic_version"
                 ).fetchone()[0],
-                "20260801_18",
+                "20260805_20",
             )
             self.assertEqual(
                 connection.execute("PRAGMA foreign_key_check").fetchall(),
@@ -144,9 +144,10 @@ class FoundationMigrationTests(unittest.TestCase):
                 connection.execute("PRAGMA foreign_key_check").fetchall(),
                 [],
             )
-            self.assertEqual(
-                connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
-                4,
+            self.assertIsNone(
+                connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
+                ).fetchone()
             )
             placeholders = connection.execute(
                 """
@@ -240,7 +241,7 @@ class VersionedApiSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["token"]
 
-    def test_auth_chat_message_and_websocket(self) -> None:
+    def test_auth_chat_and_plaintext_websocket_rejection(self) -> None:
         alice_token = self._register_and_login("alice")
         bob_token = self._register_and_login("bob")
         alice_headers = {"Authorization": f"Bearer {alice_token}"}
@@ -258,33 +259,24 @@ class VersionedApiSmokeTests(unittest.TestCase):
         chat = chat_response.json()
         self.assertEqual(chat["members"], ["alice", "bob"])
 
-        with (
-            self.client.websocket_connect(
-                "/api/v1/realtime/ws",
-                subprotocols=[f"bearer.{alice_token}"],
-            ) as alice_ws,
-            self.client.websocket_connect(
-                "/api/v1/realtime/ws",
-                subprotocols=[f"bearer.{bob_token}"],
-            ) as bob_ws,
-        ):
+        with self.client.websocket_connect(
+            "/api/v1/realtime/ws",
+            subprotocols=[f"bearer.{alice_token}"],
+        ) as alice_ws:
             alice_ws.send_json({"chat_id": chat["id"], "text": "hello"})
             alice_event = alice_ws.receive_json()
-            bob_event = bob_ws.receive_json()
-        self.assertEqual(alice_event["id"], bob_event["id"])
-        self.assertEqual(alice_event["type"], "message_ack")
-        self.assertEqual(bob_event["type"], "message")
-        self.assertEqual(alice_event["sender"], "alice")
+        self.assertEqual(alice_event["type"], "error")
+        self.assertIn("opaque MLS", alice_event["detail"])
 
         messages = self.client.get(
             f"/api/v1/chats/{chat['id']}/messages",
             headers=alice_headers,
         )
-        self.assertEqual(messages.status_code, 200)
-        self.assertEqual(messages.json()["items"][0]["content"], "hello")
+        self.assertEqual(messages.status_code, 404)
 
         paths = self.client.get("/openapi.json").json()["paths"]
         self.assertIn("/api/v1/auth/login", paths)
+        self.assertNotIn("/api/v1/chats/{chat_id}/messages", paths)
         self.assertNotIn("/login", paths)
 
     def test_refresh_cookie_rotates_and_logout_revokes_session(self) -> None:

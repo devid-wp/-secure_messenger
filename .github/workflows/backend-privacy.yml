@@ -1,0 +1,35 @@
+name: Backend privacy boundary
+
+on:
+  push:
+    paths:
+      - "app/**"
+      - "migrations/**"
+      - "tests/test_foundation.py"
+      - "tests/test_e2ee_delivery.py"
+      - "requirements*.txt"
+      - ".github/workflows/backend-privacy.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "migrations/**"
+      - "tests/test_foundation.py"
+      - "tests/test_e2ee_delivery.py"
+      - "requirements*.txt"
+      - ".github/workflows/backend-privacy.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  opaque-storage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Verify migrations and opaque delivery contract
+        run: pytest -q tests/test_foundation.py tests/test_e2ee_delivery.py
