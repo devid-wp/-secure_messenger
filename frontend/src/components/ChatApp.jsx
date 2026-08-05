@@ -300,7 +300,6 @@ function ChatApp({ token, login, deviceId, onLogout }) {
   const prependingHistoryRef = useRef(false)
   const outboxRef = useRef(readOutbox(login))
   const reconnectTimerRef = useRef(null)
-  const readReceiptsRef = useRef(new Set())
   const decryptedEnvelopesRef = useRef(new Map())
   const sentSinceUpdateRef = useRef(new Map())
   const profileAvatarPreviewRef = useRef(null)
@@ -460,10 +459,28 @@ function ChatApp({ token, login, deviceId, onLogout }) {
           throw new Error('Could not load conversations')
         }
 
-        const chatData = [
-          ...await groupsResponse.json(),
-          ...await dmResponse.json(),
-        ]
+        const groups = await groupsResponse.json()
+        for (const group of groups) {
+          try {
+            await synchronizeMlsGroup(token, deviceId, group.id)
+            const response = await fetch(
+              `${API_URL}/api/v1/e2ee/chats/${group.id}/envelopes?after=0`,
+              { headers: authHeaders }
+            )
+            if (!response.ok) continue
+            const envelopes = await response.json()
+            for (const envelope of envelopes) {
+              if (envelope.content_type !== 'application') continue
+              const item = await decryptEnvelope(group.id, envelope)
+              if (item?.operation === 'group_metadata' && item.name) {
+                group.name = item.name
+              }
+            }
+          } catch {
+            // Missing/stale epochs leave an opaque fallback title.
+          }
+        }
+        const chatData = [...groups, ...await dmResponse.json()]
         const invitationData = await invitationsResponse.json()
         const profileData = await profileResponse.json()
         const blockedPeople = await blocksResponse.json()
@@ -489,7 +506,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     return () => {
       cancelled = true
     }
-  }, [authHeaders, onLogout])
+  }, [authHeaders, deviceId, onLogout, token])
 
   useEffect(() => {
     const query = searchQuery.trim()
@@ -527,13 +544,14 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       return undefined
     }
 
+    const activeChatId = selectedChatId
     let cancelled = false
     const loadMessages = async () => {
       setMessagesLoading(true)
       try {
-        await synchronizeMlsGroup(token, deviceId, selectedChatId)
+        await synchronizeMlsGroup(token, deviceId, activeChatId)
         const response = await fetch(
-          `${API_URL}/api/v1/e2ee/chats/${selectedChatId}/envelopes?after=0`,
+          `${API_URL}/api/v1/e2ee/chats/${activeChatId}/envelopes?after=0`,
           { headers: authHeaders }
         )
         if (response.status === 401) {
@@ -548,13 +566,15 @@ function ChatApp({ token, login, deviceId, onLogout }) {
           let item = decryptedEnvelopesRef.current.get(envelope.id)
           if (!item) {
             try {
-              item = await decryptEnvelope(selectedChatId, envelope)
+              item = await decryptEnvelope(activeChatId, envelope)
               if (item) decryptedEnvelopesRef.current.set(envelope.id, item)
             } catch {
               // Duplicate/replay and an unavailable epoch fail closed.
             }
           }
-          if (item?.operation === 'edit') {
+          if (item?.operation === 'group_metadata') {
+            continue
+          } else if (item?.operation === 'edit') {
             const target = decrypted.find((message) => message.client_id === item.target_client_id)
             if (target?.sender === item.sender) Object.assign(target, { content: item.content, edited_at: envelope.created_at })
           } else if (item?.operation === 'delete') {
@@ -569,12 +589,12 @@ function ChatApp({ token, login, deviceId, onLogout }) {
         }
         if (!cancelled) {
           const pending = outboxRef.current.filter(
-            (message) => message.chat_id === selectedChatId
+            (message) => message.chat_id === activeChatId
           )
           setMessages([...decrypted, ...pending])
           setNextCursor(null)
           setChats((previous) => previous.map((chat) => (
-            chat.id === selectedChatId ? { ...chat, unread_count: 0 } : chat
+            chat.id === activeChatId ? { ...chat, unread_count: 0 } : chat
           )))
           setError('')
         }
@@ -782,26 +802,6 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     }
   }, [login, onLogout, token])
 
-  useEffect(() => {
-    const ws = wsRef.current
-    if (!wsReady || !ws || selectedChatId === null) return
-    for (const message of messages) {
-      const key = `${message.chat_id}:${message.server_seq}`
-      if (
-        message.sender !== login
-        && message.server_seq
-        && !readReceiptsRef.current.has(key)
-      ) {
-        readReceiptsRef.current.add(key)
-        ws.send(JSON.stringify({
-          type: 'read',
-          chat_id: message.chat_id,
-          server_seq: message.server_seq,
-        }))
-      }
-    }
-  }, [login, messages, selectedChatId, wsReady])
-
   const selectConversation = async (conversation) => {
     setError('')
     if (conversation.chatId !== null) {
@@ -988,13 +988,19 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     const response = await fetch(`${API_URL}/api/v1/chats/groups`, {
       method: 'POST',
       headers: { ...authHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: groupName.trim(), avatar_url: null }),
+      body: JSON.stringify({ avatar_url: null }),
     })
     if (!response.ok) {
       setError('Could not create the group')
       return
     }
     let group = await response.json()
+    await synchronizeMlsGroup(token, deviceId, group.id)
+    await encryptAndPublish(token, group.id, {
+      operation: 'group_metadata',
+      name: groupName.trim(),
+    })
+    group = { ...group, name: groupName.trim() }
     if (groupAvatar) {
       const formData = new FormData()
       formData.append('avatar', groupAvatar)
@@ -1567,7 +1573,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       }
       const form = new FormData()
       form.append('ciphertext', new Blob([ciphertext]), 'ciphertext.bin')
-      form.append('plaintext_content_type', file.type || 'application/octet-stream')
+      form.append('chat_id', String(selectedChatId))
       form.append('cipher', 'AES-256-GCM')
       form.append('nonce', bytesToBase64(nonce))
       if (width && height) {
@@ -1697,7 +1703,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
             key={invitation.id}
             onClick={() => acceptInvitation(invitation)}
           >
-            Accept: {invitation.group_name}
+            Accept encrypted group invitation #{invitation.chat_id}
           </button>
         ))}
 
