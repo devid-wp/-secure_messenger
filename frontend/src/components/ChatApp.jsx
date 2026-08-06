@@ -25,6 +25,8 @@ import {
   synchronizeMlsGroup,
 } from '../crypto/e2eeMessaging'
 import { decryptAttachment, encryptAttachment } from '../crypto/attachmentCrypto'
+import { createSafetyCode } from '../crypto/safetyCode'
+import QRCode from 'qrcode'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const WS_URL = API_URL
@@ -205,6 +207,8 @@ function ChatApp({ token, login, deviceId, onLogout }) {
   const [devicesOpen, setDevicesOpen] = useState(false)
   const [devices, setDevices] = useState([])
   const [deviceBusy, setDeviceBusy] = useState(false)
+  const [verification, setVerification] = useState(null)
+  const [verificationBusy, setVerificationBusy] = useState(false)
   const [profileAvatar, setProfileAvatar] = useState(null)
   const [profileAvatarPreview, setProfileAvatarPreview] = useState(null)
   const [profileFormError, setProfileFormError] = useState('')
@@ -1111,6 +1115,20 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     }
   }
 
+  const openContactVerification = async () => {
+    const contactLogin = selectedConversation?.userLogin
+    if (!contactLogin) return
+    setChatMenuOpen(false); setVerificationBusy(true)
+    try {
+      const responses = await Promise.all([login, contactLogin].map((name) => fetch(
+        `${API_URL}/api/v1/e2ee/users/${encodeURIComponent(name)}/identities`, { headers: authHeaders },
+      )))
+      if (responses.some((response) => !response.ok)) throw new Error('Could not load device identities')
+      const code = await createSafetyCode(await Promise.all(responses.map((response) => response.json())))
+      setVerification({ contactLogin, code: code.display, qr: await QRCode.toDataURL(code.qrPayload, { errorCorrectionLevel: 'M', margin: 1, width: 240 }) })
+    } catch (caught) { setError(caught.message) } finally { setVerificationBusy(false) }
+  }
+
   const acknowledgeSecurityEvent = async (eventId) => {
     const response = await fetch(`${API_URL}/api/v1/e2ee/security-events/${eventId}/acknowledge`, {
       method: 'POST', headers: authHeaders,
@@ -1652,6 +1670,9 @@ function ChatApp({ token, login, deviceId, onLogout }) {
             {chatMenuOpen && selectedConversation && (
               <div className="chat-actions-menu" role="menu">
                 {selectedConversation.type === 'dm' && (
+                  <button type="button" disabled={verificationBusy} onClick={openContactVerification}>Verify safety code</button>
+                )}
+                {selectedConversation.type === 'dm' && (
                   selectedUserIsBlocked
                     ? <button type="button" className="restore-action" onClick={unblockSelectedUser}>Unblock @{selectedConversation.username}</button>
                     : <button type="button" className="danger-action" onClick={blockSelectedUser}>Block @{selectedConversation.username}</button>
@@ -1941,6 +1962,17 @@ function ChatApp({ token, login, deviceId, onLogout }) {
               ))}
             </div>
             <p className="devices-panel__notice">Revocation closes HTTP sessions and WebSockets immediately. Cryptographic removal completes only after clients apply the MLS Remove Commit.</p>
+          </div>
+        </Modal>
+      )}
+
+      {verification && (
+        <Modal title={`Verify @${verification.contactLogin}`} onClose={() => setVerification(null)}>
+          <div className="devices-panel">
+            <p>Compare this QR code or all 60 digits over an authenticated channel. A match verifies every currently active device.</p>
+            <img src={verification.qr} width="240" height="240" alt="Contact safety QR code" />
+            <code className="profile-identity">{verification.code}</code>
+            <p className="devices-panel__notice">The code changes when either participant adds, replaces, or revokes an identity.</p>
           </div>
         </Modal>
       )}

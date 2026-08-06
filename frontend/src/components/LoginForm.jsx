@@ -49,7 +49,7 @@ function LoginForm({ onLogin }) {
           login,
           password,
           device_name: localDeviceName(),
-          client_type: '__TAURI_INTERNALS__' in window ? 'desktop' : 'web',
+          client_type: 'web',
         }),
       })
 
@@ -88,7 +88,7 @@ function LoginForm({ onLogin }) {
           <p className="login-subtitle">
             {isRegister
               ? 'Choose credentials for this development server'
-              : 'End-to-end encryption is not enabled yet'}
+              : 'MLS end-to-end encryption is enabled for every device'}
           </p>
         </div>
 
