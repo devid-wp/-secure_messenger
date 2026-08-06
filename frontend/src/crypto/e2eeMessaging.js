@@ -4,10 +4,9 @@ import {
   removeMlsDevices, updateMlsGroup,
 } from './mlsRuntimeBridge'
 import { synchronizeDeviceMls } from './e2eeBootstrap'
+import { decodeApplicationPayload, encodeApplicationPayload } from './applicationPayload'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
-const encoder = new TextEncoder()
-const decoder = new TextDecoder('utf-8', { fatal: true })
 const deviceOwners = new Map()
 
 function bytesToBase64(bytes) {
@@ -101,7 +100,7 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
 }
 
 export async function encryptAndPublish(token, chatId, message) {
-  const plaintext = encoder.encode(JSON.stringify(message))
+  const plaintext = encodeApplicationPayload(message)
   const encrypted = await encryptMls(chatId, plaintext)
   return publishEnvelope(token, chatId, 'application', encrypted.epoch, encrypted.ciphertext)
 }
@@ -114,14 +113,14 @@ export async function decryptEnvelope(chatId, envelope) {
   const wire = base64ToBytes(envelope.payload)
   const cached = await cachedMlsApplication(wire)
   if (cached) {
-    const value = JSON.parse(decoder.decode(Uint8Array.from(cached)))
+    const value = decodeApplicationPayload(Uint8Array.from(cached))
     value.sender = deviceOwners.get(envelope.sender_device_id)
     if (!value.sender) throw new Error('MLS sender device is not in the authenticated directory')
     return value
   }
   const processed = await processMls(chatId, wire)
   if (processed.kind !== 'application') return null
-  const value = JSON.parse(decoder.decode(Uint8Array.from(processed.plaintext)))
+  const value = decodeApplicationPayload(Uint8Array.from(processed.plaintext))
   value.sender = deviceOwners.get(envelope.sender_device_id)
   if (!value.sender) throw new Error('MLS sender device is not in the authenticated directory')
   return value

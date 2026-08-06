@@ -109,6 +109,13 @@ MLS доверяет Authentication Service в привязке credential к id
 - Application payload имеет отдельную versioned canonical encoding.
 - Group name, receipts и device events шифруются как application data.
 - Outer envelope не повторяет sender user name или application content type.
+
+Application data uses this canonical versioned JSON object before MLS
+encryption: `{"version":1,"type":"message","client_id":"uuid","sent_at":"ISO-8601","body":{...}}`.
+Supported types are `message`, `edit`, `delete`, `reaction`, `receipt`,
+`attachment`, `group_metadata`, and `device_event`. Unknown versions, types,
+top-level fields, malformed UUID/timestamps, mutation targets, and payloads over
+64 KiB are rejected after authenticated MLS decryption and before rendering.
 - Welcome доставляется только адресованным device IDs.
 - KeyPackage одноразовый; использованный package удаляется атомарно.
 - Клиент ограничивает skipped generations и максимальный скачок epoch.
