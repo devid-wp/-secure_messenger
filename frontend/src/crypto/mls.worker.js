@@ -1,10 +1,12 @@
 import initWasm, { WasmMlsClient } from './wasm-generated/mls.js'
+import { PBKDF2_ITERATIONS, randomBytes, unwrapDek, vaultAad, wrapNewDek } from './vaultCrypto.js'
 
 const DB_NAME = 'secure-messenger-mls-v1'
 const DB_VERSION = 1
 const encoder = new TextEncoder()
 let client = null
 let activeDeviceId = null
+let activeDek = null
 let wasmReady = null
 
 function openDatabase() {
@@ -41,6 +43,16 @@ async function writeStore(store, key, value) {
   })
 }
 
+async function deleteStore(store, key) {
+  const database = await openDatabase()
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(store, 'readwrite')
+    transaction.objectStore(store).delete(key)
+    transaction.oncomplete = () => { database.close(); resolve(undefined) }
+    transaction.onerror = () => { database.close(); reject(transaction.error) }
+  })
+}
+
 async function vaultKey() {
   let key = await readStore('keys', 'device-state')
   if (key) return key
@@ -49,7 +61,7 @@ async function vaultKey() {
   return key
 }
 
-async function loadState(deviceId) {
+async function loadLegacyState(deviceId) {
   const record = await readStore('state', deviceId)
   if (!record) return null
   if (record.version !== 1 || !(record.iv instanceof Uint8Array) || !(record.ciphertext instanceof ArrayBuffer)) {
@@ -62,15 +74,62 @@ async function loadState(deviceId) {
   return new Uint8Array(plaintext)
 }
 
+async function createV2Record(deviceId, passphrase, state = new Uint8Array()) {
+  const { dek, salt, wrapIv, wrappedDek } = await wrapNewDek(deviceId, passphrase)
+  const stateIv = randomBytes(12)
+  const stateCiphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: stateIv, additionalData: vaultAad(deviceId, 'state') }, dek, state)
+  const record = {
+    version: 2, device_id: deviceId,
+    kdf: { name: 'PBKDF2-HMAC-SHA-256', salt, parameters: { iterations: PBKDF2_ITERATIONS } },
+    wrapped_dek: wrappedDek, wrap_iv: wrapIv,
+    state_ciphertext: stateCiphertext, state_iv: stateIv,
+    updated_at: new Date().toISOString(),
+  }
+  await writeStore('state', deviceId, record)
+  activeDek = dek
+  return record
+}
+
+function validV2(record, deviceId) {
+  return record?.version === 2 && record.device_id === deviceId
+    && record.kdf?.name === 'PBKDF2-HMAC-SHA-256'
+    && Number.isSafeInteger(record.kdf.parameters?.iterations)
+}
+
+async function unlockV2(deviceId, passphrase) {
+  const record = await readStore('state', deviceId)
+  if (!validV2(record, deviceId)) throw new Error('Invalid browser vault record')
+  try {
+    activeDek = await unwrapDek(deviceId, passphrase, record)
+    return new Uint8Array(await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: record.state_iv, additionalData: vaultAad(deviceId, 'state') }, activeDek, record.state_ciphertext,
+    ))
+  } catch {
+    activeDek = null
+    throw new Error('Incorrect passphrase or corrupted browser vault')
+  }
+}
+
+async function loadState(deviceId) {
+  const record = await readStore('state', deviceId)
+  if (!record) return null
+  if (record.version === 1) throw new Error('Browser vault migration is required')
+  if (!activeDek) throw new Error('Browser vault is locked')
+  return new Uint8Array(await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: record.state_iv, additionalData: vaultAad(deviceId, 'state') }, activeDek, record.state_ciphertext,
+  ))
+}
+
 async function persist() {
   if (!client || !activeDeviceId) throw new Error('MLS worker is locked')
   const plaintext = client.export_state()
-  const iv = crypto.getRandomValues(new Uint8Array(12))
+  if (!activeDek) throw new Error('Browser vault is locked')
+  const iv = randomBytes(12)
   const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv, additionalData: encoder.encode(`secure-messenger:${activeDeviceId}:v1`) },
-    await vaultKey(), plaintext
+    { name: 'AES-GCM', iv, additionalData: vaultAad(activeDeviceId, 'state') }, activeDek, plaintext
   )
-  await writeStore('state', activeDeviceId, { version: 1, iv, ciphertext })
+  const record = await readStore('state', activeDeviceId)
+  await writeStore('state', activeDeviceId, { ...record, state_ciphertext: ciphertext, state_iv: iv, updated_at: new Date().toISOString() })
   plaintext.fill(0)
 }
 
@@ -81,6 +140,39 @@ function fromBase64(value) {
 }
 
 const handlers = {
+  async vaultStatus({ deviceId }) {
+    const record = await readStore('state', deviceId)
+    return { exists: Boolean(record), version: record?.version || null, locked: !activeDek || activeDeviceId !== deviceId, migrationRequired: record?.version === 1 }
+  },
+  async createVault({ deviceId, passphrase }) {
+    if (await readStore('state', deviceId)) throw new Error('Browser vault already exists')
+    activeDeviceId = deviceId
+    await createV2Record(deviceId, passphrase)
+    return true
+  },
+  async migrateVault({ deviceId, passphrase }) {
+    const record = await readStore('state', deviceId)
+    if (record?.version !== 1) throw new Error('No legacy browser vault found')
+    const state = await loadLegacyState(deviceId)
+    activeDeviceId = deviceId
+    try {
+      await createV2Record(deviceId, passphrase, state)
+      await unlockV2(deviceId, passphrase)
+      await deleteStore('keys', 'device-state')
+    } catch (error) {
+      activeDek = null
+      await writeStore('state', deviceId, record)
+      throw error
+    } finally {
+      state?.fill(0)
+    }
+    return true
+  },
+  async unlockVault({ deviceId, passphrase }) {
+    activeDeviceId = deviceId
+    await unlockV2(deviceId, passphrase)
+    return true
+  },
   async initialize({ deviceId, packageCount }) {
     if (!wasmReady) wasmReady = initWasm()
     await wasmReady
@@ -122,7 +214,7 @@ const handlers = {
     const value = parse(client.self_update(String(chatId))); await persist()
     return { commit: fromBase64(value.message), epoch: value.epoch }
   },
-  async lock() { client = null; activeDeviceId = null; return true },
+  async lock() { client = null; activeDek = null; activeDeviceId = null; return true },
 }
 
 self.onmessage = async ({ data }) => {

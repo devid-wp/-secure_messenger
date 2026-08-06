@@ -47,6 +47,10 @@ export const cachedMlsApplication = (message) => invokeWorker('cached', { messag
 export const listMlsMembers = (chatId) => invokeWorker('members', { chatId })
 export const removeMlsDevices = (chatId, deviceIds) => invokeWorker('remove', { chatId, deviceIds })
 export const updateMlsGroup = (chatId) => invokeWorker('update', { chatId })
+export const getVaultStatus = (deviceId) => invokeWorker('vaultStatus', { deviceId })
+export const createVault = (deviceId, passphrase) => invokeWorker('createVault', { deviceId, passphrase })
+export const migrateVault = (deviceId, passphrase) => invokeWorker('migrateVault', { deviceId, passphrase })
+export const unlockVault = (deviceId, passphrase) => invokeWorker('unlockVault', { deviceId, passphrase })
 
 export async function lockMlsRuntime() {
   if (!worker) return
