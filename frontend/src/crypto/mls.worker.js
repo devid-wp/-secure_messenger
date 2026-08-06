@@ -36,7 +36,7 @@ async function writeStore(store, key, value) {
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(store, 'readwrite')
     transaction.objectStore(store).put(value, key)
-    transaction.oncomplete = () => { database.close(); resolve() }
+    transaction.oncomplete = () => { database.close(); resolve(undefined) }
     transaction.onerror = () => { database.close(); reject(transaction.error) }
   })
 }

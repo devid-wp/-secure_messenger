@@ -1,21 +1,13 @@
 import { useEffect, useState } from 'react'
 import LoginForm from './components/LoginForm'
 import ChatApp from './components/ChatApp'
-import {
-  clearNativeSession,
-  isDesktopRuntime,
-  readNativeSession,
-  saveNativeSession,
-} from './crypto/desktopBridge'
 import { synchronizeDeviceMls } from './crypto/e2eeBootstrap'
 import { lockMlsRuntime } from './crypto/mlsRuntimeBridge'
 import './App.css'
 
 function App() {
-  const desktop = isDesktopRuntime()
   const [token, setToken] = useState(null)
   const [login, setLogin] = useState(null)
-  const [refreshToken, setRefreshToken] = useState(null)
   const [accessExpiresAt, setAccessExpiresAt] = useState(null)
   const [deviceId, setDeviceId] = useState(null)
   const [sessionReady, setSessionReady] = useState(false)
@@ -25,7 +17,6 @@ function App() {
     localStorage.removeItem('token')
     localStorage.removeItem('login')
     const restore = async () => {
-      const nativeSession = desktop ? await readNativeSession() : null
       const response = await fetch(
         `${import.meta.env.VITE_API_URL ?? 'http://localhost:8000'}/api/v1/auth/refresh`,
         {
@@ -33,8 +24,8 @@ function App() {
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            client_type: desktop ? 'desktop' : 'web',
-            refresh_token: nativeSession?.refreshToken ?? null,
+            client_type: 'web',
+            refresh_token: null,
           }),
         }
       )
@@ -45,23 +36,17 @@ function App() {
         setLogin(data.login)
         setAccessExpiresAt(Date.now() + data.expires_in * 1000)
         setDeviceId(data.device_id)
-        if (desktop && data.refresh_token) {
-          setRefreshToken(data.refresh_token)
-          await saveNativeSession(data.refresh_token, data.login)
-        }
       }
     }
     restore()
-      .catch(async () => {
-        if (desktop) await clearNativeSession().catch(() => {})
-      })
+      .catch(() => {})
       .finally(() => {
         if (!cancelled) setSessionReady(true)
       })
     return () => {
       cancelled = true
     }
-  }, [desktop])
+  }, [])
 
   useEffect(() => {
     if (!token || !accessExpiresAt) return
@@ -75,8 +60,8 @@ function App() {
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              client_type: desktop ? 'desktop' : 'web',
-              refresh_token: desktop ? refreshToken : null,
+              client_type: 'web',
+              refresh_token: null,
             }),
           }
         )
@@ -85,27 +70,17 @@ function App() {
         setToken(data.access_token)
         setAccessExpiresAt(Date.now() + data.expires_in * 1000)
         setDeviceId(data.device_id)
-        if (desktop && data.refresh_token) {
-          setRefreshToken(data.refresh_token)
-          await saveNativeSession(data.refresh_token, data.login)
-        }
       } catch {
         setToken(null)
         setLogin(null)
-        setRefreshToken(null)
         setAccessExpiresAt(null)
         setDeviceId(null)
-        if (desktop) await clearNativeSession().catch(() => {})
       }
     }, delay)
     return () => window.clearTimeout(timer)
-  }, [accessExpiresAt, desktop, refreshToken, token])
+  }, [accessExpiresAt, token])
 
   const handleLogin = async (newToken, newLogin, data) => {
-    if (desktop) {
-      await saveNativeSession(data.refresh_token, newLogin)
-      setRefreshToken(data.refresh_token)
-    }
     setToken(newToken)
     setLogin(newLogin)
     setAccessExpiresAt(Date.now() + data.expires_in * 1000)
@@ -126,8 +101,8 @@ function App() {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              client_type: desktop ? 'desktop' : 'web',
-              refresh_token: desktop ? refreshToken : null,
+              client_type: 'web',
+              refresh_token: null,
             }),
           }
         )
@@ -137,16 +112,11 @@ function App() {
     }
     try {
       await lockMlsRuntime()
-      if (desktop) {
-        await clearNativeSession()
-      } else {
-        localStorage.removeItem('token')
-        localStorage.removeItem('login')
-      }
+      localStorage.removeItem('token')
+      localStorage.removeItem('login')
     } finally {
       setToken(null)
       setLogin(null)
-      setRefreshToken(null)
       setAccessExpiresAt(null)
       setDeviceId(null)
     }

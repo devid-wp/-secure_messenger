@@ -1,17 +1,3 @@
-import {
-  addNativeMlsMembers,
-  createNativeMlsGroup,
-  encryptNativeMls,
-  initializeNativeMls,
-  isDesktopRuntime,
-  joinNativeMlsGroup,
-  listNativeMlsMembers,
-  processNativeMls,
-  readCachedMlsApplication,
-  removeNativeMlsDevices,
-  updateNativeMlsGroup,
-} from './desktopBridge'
-
 let worker = null
 let nextRequestId = 1
 const pending = new Map()
@@ -50,30 +36,20 @@ function invokeWorker(method, arguments_ = {}) {
   })
 }
 
-export function mlsRuntimeAvailable() { return isDesktopRuntime() || browserSupported() }
-export const initializeMls = (deviceId, packageCount) => isDesktopRuntime()
-  ? initializeNativeMls(deviceId, packageCount) : invokeWorker('initialize', { deviceId, packageCount })
-export const createMlsGroup = (deviceId, chatId) => isDesktopRuntime()
-  ? createNativeMlsGroup(deviceId, chatId) : invokeWorker('createGroup', { chatId })
-export const addMlsMembers = (chatId, keyPackages) => isDesktopRuntime()
-  ? addNativeMlsMembers(chatId, keyPackages) : invokeWorker('addMembers', { chatId, keyPackages: keyPackages.map(bytesToBase64) })
-export const joinMlsGroup = (welcome) => isDesktopRuntime()
-  ? joinNativeMlsGroup(welcome) : invokeWorker('join', { welcome })
-export const encryptMls = (chatId, plaintext) => isDesktopRuntime()
-  ? encryptNativeMls(chatId, plaintext) : invokeWorker('encrypt', { chatId, plaintext })
-export const processMls = (chatId, message) => isDesktopRuntime()
-  ? processNativeMls(chatId, message) : invokeWorker('process', { chatId, message })
-export const cachedMlsApplication = (message) => isDesktopRuntime()
-  ? readCachedMlsApplication(message) : invokeWorker('cached', { message })
-export const listMlsMembers = (chatId) => isDesktopRuntime()
-  ? listNativeMlsMembers(chatId) : invokeWorker('members', { chatId })
-export const removeMlsDevices = (chatId, deviceIds) => isDesktopRuntime()
-  ? removeNativeMlsDevices(chatId, deviceIds) : invokeWorker('remove', { chatId, deviceIds })
-export const updateMlsGroup = (chatId) => isDesktopRuntime()
-  ? updateNativeMlsGroup(chatId) : invokeWorker('update', { chatId })
+export function mlsRuntimeAvailable() { return browserSupported() }
+export const initializeMls = (deviceId, packageCount) => invokeWorker('initialize', { deviceId, packageCount })
+export const createMlsGroup = (_deviceId, chatId) => invokeWorker('createGroup', { chatId })
+export const addMlsMembers = (chatId, keyPackages) => invokeWorker('addMembers', { chatId, keyPackages: keyPackages.map(bytesToBase64) })
+export const joinMlsGroup = (welcome) => invokeWorker('join', { welcome })
+export const encryptMls = (chatId, plaintext) => invokeWorker('encrypt', { chatId, plaintext })
+export const processMls = (chatId, message) => invokeWorker('process', { chatId, message })
+export const cachedMlsApplication = (message) => invokeWorker('cached', { message })
+export const listMlsMembers = (chatId) => invokeWorker('members', { chatId })
+export const removeMlsDevices = (chatId, deviceIds) => invokeWorker('remove', { chatId, deviceIds })
+export const updateMlsGroup = (chatId) => invokeWorker('update', { chatId })
 
 export async function lockMlsRuntime() {
-  if (isDesktopRuntime() || !worker) return
+  if (!worker) return
   await invokeWorker('lock').catch(() => {})
   worker.terminate()
   worker = null

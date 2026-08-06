@@ -1,6 +1,6 @@
 # Secure Messenger
 
-FastAPI, React and Tauri messenger with a native OpenMLS cryptographic boundary.
+FastAPI and React messenger with an OpenMLS WebAssembly cryptographic boundary.
 
 ## Open as a Windows application
 
@@ -34,7 +34,7 @@ taskbar icon and does not require the BAT launcher afterward.
 
 The PWA runs pinned OpenMLS WebAssembly in a dedicated Worker. Its MLS state is
 AES-GCM encrypted in IndexedDB with a non-extractable WebCrypto key; it uses the
-same opaque MLS envelope transport as the Tauri client.
+same opaque MLS envelope transport in every supported browser.
 
 ## Development
 

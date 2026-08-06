@@ -1,7 +1,7 @@
 # PWA E2EE runtime
 
-The installable PWA uses the same MLS 1.0 ciphersuite and pinned OpenMLS 0.8.1
-as the Tauri client. It does not use a JavaScript cryptographic fallback.
+The installable PWA uses the MLS 1.0 ciphersuite and pinned OpenMLS 0.8.1.
+It does not use a JavaScript cryptographic fallback or a native desktop runtime.
 
 ## Boundary
 

@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 [dependencies]
 base64 = "0.22"
 getrandom = { version = "0.2", features = ["js"] }
-openmls = "=0.8.1"
+openmls = { version = "=0.8.1", features = ["js"] }
 openmls_basic_credential = "=0.5.0"
 openmls_rust_crypto = "=0.5.1"
 serde = { version = "1", features = ["derive"] }
