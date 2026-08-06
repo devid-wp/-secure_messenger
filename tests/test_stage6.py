@@ -156,8 +156,7 @@ class StageSixMediaTests(unittest.TestCase):
             json={"login": "bob"},
         ).json()
         ciphertext = b"encrypted-content-with-authentication-tag"
-        nonce = base64.b64encode(bytes(range(12))).decode()
-        upload = self.client.post(
+        rejected = self.client.post(
             "/api/v1/media/attachments",
             headers=self.headers(alice),
             files={
@@ -168,20 +167,22 @@ class StageSixMediaTests(unittest.TestCase):
                 )
             },
             data={
+                "chat_id": str(chat["id"]),
                 "plaintext_content_type": "image/png",
                 "cipher": "AES-256-GCM",
-                "nonce": nonce,
-                "width": "800",
-                "height": "600",
             },
+        )
+        self.assertEqual(rejected.status_code, 422, rejected.text)
+        upload = self.client.post(
+            "/api/v1/media/attachments", headers=self.headers(alice),
+            files={"ciphertext": ("ciphertext.bin", ciphertext, "application/octet-stream")},
+            data={"chat_id": str(chat["id"])},
         )
         self.assertEqual(upload.status_code, 201, upload.text)
         attachment = upload.json()
         self.assertTrue(attachment["is_encrypted"])
         self.assertNotIn("key", attachment)
 
-        client_id = str(uuid4())
-        envelope = "opaque-mls-application-ciphertext"
         with self.client.websocket_connect(
             "/api/v1/realtime/ws",
             subprotocols=[f"bearer.{alice}"],
@@ -189,18 +190,10 @@ class StageSixMediaTests(unittest.TestCase):
             websocket.send_json(
                 {
                     "type": "send_message",
-                    "kind": "image",
-                    "chat_id": chat["id"],
-                    "content": "",
-                    "attachment_id": attachment["id"],
-                    "key_envelope": envelope,
-                    "client_id": client_id,
+                    "content": "plaintext is forbidden",
                 }
             )
-            message = websocket.receive_json()
-        self.assertEqual(message["kind"], "image")
-        self.assertEqual(message["attachment"]["id"], attachment["id"])
-        self.assertEqual(message["key_envelope"], envelope)
+            self.assertEqual(websocket.receive_json()["type"], "error")
 
         download = self.client.get(
             attachment["content_url"],

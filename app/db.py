@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 from .core.config import Settings
 
@@ -28,12 +29,14 @@ def create_database_engine(settings: Settings) -> AsyncEngine:
     connect_args: dict[str, object] = {}
     if settings.database_url.startswith("sqlite"):
         connect_args["timeout"] = 10
-    return create_async_engine(
-        settings.database_url,
-        echo=settings.sql_echo,
-        pool_pre_ping=True,
-        connect_args=connect_args,
-    )
+    options: dict[str, object] = {
+        "echo": settings.sql_echo,
+        "pool_pre_ping": True,
+        "connect_args": connect_args,
+    }
+    if settings.database_url.startswith("sqlite"):
+        options["poolclass"] = NullPool
+    return create_async_engine(settings.database_url, **options)
 
 
 def create_session_factory(

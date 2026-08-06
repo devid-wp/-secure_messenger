@@ -16,7 +16,7 @@ from tests.test_foundation import run_migrations, sqlite_async_url
 
 class E2eeDeliveryApiTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.temporary_directory = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.database_path = Path(self.temporary_directory.name) / "e2ee.db"
         run_migrations(self.database_path)
         self.client_context = TestClient(
@@ -247,6 +247,27 @@ class E2eeDeliveryApiTests(unittest.TestCase):
         self.assertNotIn("name", chat_columns)
         self.assertNotIn("next_message_seq", chat_columns)
         self.assertIn("chat_id", media_columns)
+
+    def test_plaintext_fields_are_rejected_and_never_persisted(self) -> None:
+        alice, _ = self.register_and_login("privacy-alice")
+        bob, _ = self.register_and_login("privacy-bob")
+        chat_id = self.client.post(
+            "/api/v1/chats/dm", headers=self.headers(alice), json={"login": "privacy-bob"}
+        ).json()["id"]
+        sentinel = "SERVER_MUST_NEVER_RECEIVE_THIS_PLAINTEXT"
+        rejected = self.client.post(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes",
+            headers=self.headers(alice),
+            json={"epoch": 0, "content_type": "application", "payload": self.encoded(b"opaque"), "content": sentinel},
+        )
+        self.assertEqual(rejected.status_code, 422, rejected.text)
+        with self.client.websocket_connect(
+            "/api/v1/realtime/ws", subprotocols=[f"bearer.{bob}"]
+        ) as websocket:
+            websocket.send_json({"type": "send_message", "content": sentinel})
+            self.assertEqual(websocket.receive_json()["type"], "error")
+        with sqlite3.connect(self.database_path) as connection:
+            self.assertEqual(connection.execute("SELECT count(*) FROM mls_envelopes").fetchone()[0], 0)
 
     def test_group_name_is_rejected_by_routing_api(self) -> None:
         token, _ = self.register_and_login("opaque-group-owner")

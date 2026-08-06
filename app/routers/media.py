@@ -141,6 +141,13 @@ async def upload_encrypted_attachment(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
+    submitted_fields = set((await request.form()).keys())
+    forbidden_metadata = submitted_fields & {
+        "name", "filename", "media_type", "plaintext_content_type", "key",
+        "nonce", "cipher", "width", "height",
+    }
+    if forbidden_metadata:
+        raise HTTPException(status_code=422, detail="Attachment metadata belongs inside the MLS ciphertext")
     if await session.get(ChatMember, (chat_id, current_user.id)) is None:
         raise HTTPException(status_code=404, detail="Chat not found")
     content = await _read_limited(ciphertext, MAX_ATTACHMENT_BYTES)

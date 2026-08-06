@@ -22,7 +22,9 @@ def upgrade() -> None:
     op.drop_table("message_receipts")
     op.drop_table("messages")
     with op.batch_alter_table("chats") as batch_op:
-        batch_op.drop_constraint("ck_chats_dm_has_no_name", type_="check")
+        # `op.f` marks the legacy explicit name as already formatted so the
+        # metadata naming convention does not prefix it a second time.
+        batch_op.drop_constraint(op.f("ck_chats_dm_has_no_name"), type_="check")
         batch_op.drop_column("name")
         batch_op.drop_column("next_message_seq")
     with op.batch_alter_table("media_objects") as batch_op:

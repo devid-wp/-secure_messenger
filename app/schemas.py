@@ -88,6 +88,8 @@ class KeyPackageInventory(BaseModel):
 
 
 class MlsEnvelopePublish(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     epoch: int = Field(ge=0)
     content_type: Literal["application", "commit", "proposal", "welcome"]
     payload: Base64Bytes = Field(min_length=1, max_length=1_048_576)

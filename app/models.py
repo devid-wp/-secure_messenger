@@ -399,6 +399,9 @@ class MediaObject(Base):
         nullable=False,
         index=True,
     )
+    chat_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     purpose: Mapped[str] = mapped_column(String(16), nullable=False)
     object_key: Mapped[str] = mapped_column(String(512), nullable=False)
     storage_backend: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -522,11 +525,6 @@ class MlsEnvelope(Base):
         UniqueConstraint("sender_device_id", "message_hash", name="uq_mls_envelope_sender_hash"),
         Index("ix_mls_envelopes_chat_id_id", "chat_id", "id"),
     )
-    chat_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("chats.id", ondelete="CASCADE"),
-        index=True,
-    )
-
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
     sender_device_id: Mapped[str] = mapped_column(ForeignKey("devices.id", ondelete="RESTRICT"), nullable=False)
