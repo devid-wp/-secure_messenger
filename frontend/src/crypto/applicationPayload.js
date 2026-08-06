@@ -47,6 +47,13 @@ export function validateApplicationPayload(value) {
   if (value.type === 'edit' || value.type === 'delete') {
     if (!isUuid(value.body.target_client_id)) throw new Error('MLS mutation requires target_client_id')
   }
+  if (value.type === 'attachment') {
+    const descriptor = value.body.attachment_descriptor
+    if (!descriptor || descriptor.version !== 1 || descriptor.algorithm !== 'AES-256-GCM'
+      || !isUuid(descriptor.object_id) || typeof descriptor.key !== 'string'
+      || typeof descriptor.nonce !== 'string' || typeof descriptor.name !== 'string'
+      || typeof descriptor.media_type !== 'string') throw new Error('Invalid encrypted attachment descriptor')
+  }
   if (encoder.encode(JSON.stringify(value)).byteLength > MAX_ENCODED_BYTES) throw new Error('MLS payload is too large')
   return value
 }

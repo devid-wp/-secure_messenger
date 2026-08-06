@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import hashlib
 from io import BytesIO
 from uuid import uuid4
@@ -52,14 +50,9 @@ def _media_response(media: MediaObject) -> dict:
     return {
         "id": media.id,
         "purpose": media.purpose,
-        "content_type": media.content_type,
         "size_bytes": media.size_bytes,
         "sha256": media.sha256,
         "is_encrypted": media.is_encrypted,
-        "cipher": media.cipher,
-        "nonce": media.nonce,
-        "width": media.width,
-        "height": media.height,
         "content_url": f"/api/v1/media/{media.id}/content",
     }
 
@@ -136,16 +129,6 @@ def _normalize_sticker(content: bytes, content_type: str) -> bytes:
         raise HTTPException(status_code=415, detail="Invalid sticker image") from exc
 
 
-def _validate_nonce(value: str) -> str:
-    try:
-        decoded = base64.b64decode(value, validate=True)
-    except (ValueError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Invalid AES-GCM nonce") from exc
-    if len(decoded) != 12:
-        raise HTTPException(status_code=422, detail="AES-GCM nonce must be 12 bytes")
-    return value
-
-
 @router.post(
     "/media/attachments",
     response_model=MediaObjectResponse,
@@ -155,20 +138,11 @@ async def upload_encrypted_attachment(
     request: Request,
     ciphertext: UploadFile = File(),
     chat_id: int = Form(ge=1),
-    cipher: str = Form(pattern=r"^AES-256-GCM$"),
-    nonce: str = Form(min_length=16, max_length=24),
-    width: int | None = Form(default=None, ge=1, le=4096),
-    height: int | None = Form(default=None, ge=1, le=4096),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
     if await session.get(ChatMember, (chat_id, current_user.id)) is None:
         raise HTTPException(status_code=404, detail="Chat not found")
-    if (width is None) != (height is None):
-        raise HTTPException(
-            status_code=422,
-            detail="Image width and height must be supplied together",
-        )
     content = await _read_limited(ciphertext, MAX_ATTACHMENT_BYTES)
     media_id = str(uuid4())
     object_key = f"attachments/{current_user.id}/{media_id}.bin"
@@ -185,10 +159,6 @@ async def upload_encrypted_attachment(
         size_bytes=len(content),
         sha256=hashlib.sha256(content).hexdigest(),
         is_encrypted=True,
-        cipher=cipher,
-        nonce=_validate_nonce(nonce),
-        width=width,
-        height=height,
     )
     session.add(media)
     try:

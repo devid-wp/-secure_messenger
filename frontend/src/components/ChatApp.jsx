@@ -24,6 +24,7 @@ import {
   rotateMlsEpoch,
   synchronizeMlsGroup,
 } from '../crypto/e2eeMessaging'
+import { decryptAttachment, encryptAttachment } from '../crypto/attachmentCrypto'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const WS_URL = API_URL
@@ -65,43 +66,6 @@ function messageTime(timestamp) {
   })
 }
 
-function bytesToBase64(bytes) {
-  let binary = ''
-  const chunkSize = 0x8000
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize))
-  }
-  return btoa(binary)
-}
-
-function base64ToBytes(value) {
-  const binary = atob(value)
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
-}
-
-function createDevelopmentEnvelope(keyBytes, file) {
-  const metadata = bytesToBase64(
-    new TextEncoder().encode(JSON.stringify({
-      name: file.name,
-      type: file.type || 'application/octet-stream',
-    }))
-  )
-  return `dev-aesgcm-v1.${bytesToBase64(keyBytes)}.${metadata}`
-}
-
-function readDevelopmentEnvelope(envelope) {
-  if (!envelope?.startsWith('dev-aesgcm-v1.')) return null
-  try {
-    const [, encodedKey, encodedMetadata] = envelope.split('.')
-    const metadata = JSON.parse(
-      new TextDecoder().decode(base64ToBytes(encodedMetadata))
-    )
-    return { key: base64ToBytes(encodedKey), ...metadata }
-  } catch {
-    return null
-  }
-}
-
 function AuthenticatedMedia({ path, token, alt, className }) {
   const [source, setSource] = useState('')
 
@@ -137,13 +101,10 @@ function AuthenticatedMedia({ path, token, alt, className }) {
 
 function EncryptedAttachment({ message, token }) {
   const [state, setState] = useState({ loading: true, source: '', error: '' })
-  const envelope = useMemo(
-    () => readDevelopmentEnvelope(message.key_envelope),
-    [message.key_envelope]
-  )
+  const descriptor = useMemo(() => message.attachment_descriptor, [message.attachment_descriptor])
 
   useEffect(() => {
-    if (!message.attachment?.content_url || !envelope) {
+    if (!message.attachment?.content_url || !descriptor) {
       return undefined
     }
     let active = true
@@ -154,26 +115,11 @@ function EncryptedAttachment({ message, token }) {
           headers: { Authorization: `Bearer ${token}` },
         })
         if (!response.ok) throw new Error('Download failed')
-        const ciphertext = await response.arrayBuffer()
-        const key = await crypto.subtle.importKey(
-          'raw',
-          envelope.key,
-          { name: 'AES-GCM' },
-          false,
-          ['decrypt']
-        )
-        const plaintext = await crypto.subtle.decrypt(
-          {
-            name: 'AES-GCM',
-            iv: base64ToBytes(message.attachment.nonce),
-          },
-          key,
-          ciphertext
-        )
+        const plaintext = await decryptAttachment(new Uint8Array(await response.arrayBuffer()), descriptor)
         if (!active) return
         objectUrl = URL.createObjectURL(new Blob(
           [plaintext],
-          { type: envelope.type || message.attachment.content_type }
+          { type: descriptor.media_type }
         ))
         setState({ loading: false, source: objectUrl, error: '' })
       } catch {
@@ -187,20 +133,20 @@ function EncryptedAttachment({ message, token }) {
       active = false
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [envelope, message.attachment, token])
+  }, [descriptor, message.attachment, token])
 
-  if (!message.attachment?.content_url || !envelope) {
+  if (!message.attachment?.content_url || !descriptor) {
     return <span className="encrypted-media-error">Attachment key is unavailable</span>
   }
   if (state.loading) return <span className="encrypted-media-loading">Decrypting…</span>
   if (state.error) return <span className="encrypted-media-error">{state.error}</span>
   if (message.kind === 'image') {
-    return <img className="message__encrypted-image" src={state.source} alt={envelope?.name || 'Encrypted attachment'} />
+    return <img className="message__encrypted-image" src={state.source} alt={descriptor.name || 'Encrypted attachment'} />
   }
   return (
-    <a className="message__file-download" href={state.source} download={envelope?.name || 'attachment'}>
+    <a className="message__file-download" href={state.source} download={descriptor.name || 'attachment'}>
       <Icon name="attach" />
-      <span><strong>{envelope?.name || 'Encrypted file'}</strong><small>Download decrypted file</small></span>
+      <span><strong>{descriptor.name || 'Encrypted file'}</strong><small>Download decrypted file</small></span>
     </a>
   )
 }
@@ -1548,38 +1494,10 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     setAttachmentBusy(true)
     setError('')
     try {
-      const key = await crypto.subtle.generateKey(
-        { name: 'AES-GCM', length: 256 },
-        true,
-        ['encrypt', 'decrypt']
-      )
-      const keyBytes = new Uint8Array(await crypto.subtle.exportKey('raw', key))
-      const nonce = crypto.getRandomValues(new Uint8Array(12))
-      const plaintext = await file.arrayBuffer()
-      const ciphertext = await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv: nonce },
-        key,
-        plaintext
-      )
-      let width = null
-      let height = null
-      if (IMAGE_ATTACHMENT_TYPES.has(file.type)) {
-        const bitmap = await createImageBitmap(file)
-        if (bitmap.width <= 4096 && bitmap.height <= 4096) {
-          width = bitmap.width
-          height = bitmap.height
-        }
-        bitmap.close()
-      }
+      const { ciphertext, descriptor } = await encryptAttachment(file)
       const form = new FormData()
       form.append('ciphertext', new Blob([ciphertext]), 'ciphertext.bin')
       form.append('chat_id', String(selectedChatId))
-      form.append('cipher', 'AES-256-GCM')
-      form.append('nonce', bytesToBase64(nonce))
-      if (width && height) {
-        form.append('width', String(width))
-        form.append('height', String(height))
-      }
       const response = await fetch(`${API_URL}/api/v1/media/attachments`, {
         method: 'POST',
         headers: authHeaders,
@@ -1590,6 +1508,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
         throw new Error(body?.detail || 'Could not upload attachment')
       }
       const attachment = await response.json()
+      descriptor.object_id = attachment.id
       const clientId = crypto.randomUUID()
       const kind = IMAGE_ATTACHMENT_TYPES.has(file.type) ? 'image' : 'file'
       const pendingMessage = {
@@ -1599,7 +1518,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
         content: '',
         kind,
         attachment,
-        key_envelope: createDevelopmentEnvelope(keyBytes, file),
+        attachment_descriptor: descriptor,
         client_id: clientId,
         server_seq: null,
         timestamp: new Date().toISOString(),

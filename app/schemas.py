@@ -200,14 +200,9 @@ class GroupOwnerTransferRequest(BaseModel):
 class MediaObjectResponse(BaseModel):
     id: str
     purpose: Literal["attachment", "sticker"]
-    content_type: str
     size_bytes: int
     sha256: str
     is_encrypted: bool
-    cipher: str | None
-    nonce: str | None
-    width: int | None
-    height: int | None
     content_url: str
 
 
