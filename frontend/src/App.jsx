@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import LoginForm from './components/LoginForm'
 import ChatApp from './components/ChatApp'
-import { synchronizeDeviceMls } from './crypto/e2eeBootstrap'
+import VaultGate from './components/VaultGate'
 import { lockMlsRuntime } from './crypto/mlsRuntimeBridge'
 import './App.css'
 
@@ -122,13 +122,6 @@ function App() {
     }
   }
 
-  useEffect(() => {
-    if (!token || !deviceId) return
-    synchronizeDeviceMls(token, deviceId).catch(() => {
-      // ChatApp keeps sending disabled until its MLS runtime is ready.
-    })
-  }, [deviceId, token])
-
   if (!sessionReady) {
     return <div className="app" aria-busy="true" />
   }
@@ -138,7 +131,9 @@ function App() {
       {!token ? (
         <LoginForm onLogin={handleLogin} />
       ) : (
-        <ChatApp token={token} login={login} deviceId={deviceId} onLogout={handleLogout} />
+        <VaultGate deviceId={deviceId}>
+          <ChatApp token={token} login={login} deviceId={deviceId} onLogout={handleLogout} />
+        </VaultGate>
       )}
     </div>
   )
