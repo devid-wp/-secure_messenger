@@ -17,14 +17,15 @@
 4. [Модель угроз и политика метаданных](security-model.md)
 5. [Потеря пароля, устройства и восстановление](recovery.md)
 6. [ADR-0001: E2EE на базе MLS и OpenMLS](e2ee-protocol.md)
-7. [Политика backup/recovery локального vault](local-vault-backup-recovery.md)
-8. [Stage 5 implementation status](stage-5-progress.md)
-9. [Stage 6: stickers and encrypted media](stage-6-stickers-media.md)
-10. [PWA E2EE runtime](pwa-e2ee.md)
-11. [Backend opaque-storage boundary](backend-opaque-storage.md)
-12. [Stage 3: рабочие личные сообщения](stage-3-direct-messages.md)
-13. [Stage 4: группы](stage-4-groups.md)
-14. [Фундамент backend и миграций](foundation.md)
+7. [ADR-0002: Vault KDF и lockout semantics](adr-0002-kdf-and-lockout.md)
+8. [Политика backup/recovery локального vault](local-vault-backup-recovery.md)
+9. [Stage 5 implementation status](stage-5-progress.md)
+10. [Stage 6: stickers and encrypted media](stage-6-stickers-media.md)
+11. [PWA E2EE runtime](pwa-e2ee.md)
+12. [Backend opaque-storage boundary](backend-opaque-storage.md)
+13. [Stage 3: рабочие личные сообщения](stage-3-direct-messages.md)
+14. [Stage 4: группы](stage-4-groups.md)
+15. [Фундамент backend и миграций](foundation.md)
 
 Слова **MUST**, **MUST NOT**, **SHOULD** и **MAY** обозначают обязательное,
 запрещённое, рекомендуемое и необязательное поведение.

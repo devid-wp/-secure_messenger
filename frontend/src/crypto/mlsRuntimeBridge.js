@@ -51,10 +51,27 @@ export const getVaultStatus = (deviceId) => invokeWorker('vaultStatus', { device
 export const createVault = (deviceId, passphrase) => invokeWorker('createVault', { deviceId, passphrase })
 export const migrateVault = (deviceId, passphrase) => invokeWorker('migrateVault', { deviceId, passphrase })
 export const unlockVault = (deviceId, passphrase) => invokeWorker('unlockVault', { deviceId, passphrase })
+export const changePassphrase = (deviceId, oldPassphrase, newPassphrase) => invokeWorker('changePassphrase', { deviceId, oldPassphrase, newPassphrase })
+export const hasVault = async (deviceId) => {
+  const status = await getVaultStatus(deviceId)
+  return Boolean(status?.exists)
+}
 
 export async function lockMlsRuntime() {
   if (!worker) return
-  await invokeWorker('lock').catch(() => {})
+  // Reject every in-flight request before we tear the worker down so callers
+  // never see a stale hang. Each rejected promise carries an error message
+  // that makes the post-lock state explicit.
+  for (const [id, request] of pending) {
+    request.reject(new Error('MLS runtime was locked before the request completed'))
+    pending.delete(id)
+  }
+  try {
+    await invokeWorker('lock')
+  } catch {
+    // The lock handler runs synchronously inside the worker; any failure here
+    // means the worker is already gone, which is the desired outcome.
+  }
   worker.terminate()
   worker = null
 }

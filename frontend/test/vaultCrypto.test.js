@@ -4,6 +4,7 @@ import {
   PBKDF2_ITERATIONS,
   passphraseKey,
   randomBytes,
+  rewrapDekRaw,
   unwrapDek,
   vaultAad,
   wrapNewDek,
@@ -36,11 +37,13 @@ test('wrapNewDek returns a unique salt and unique wrap IV on every call', async 
   assert.ok(!bytesEqual(first.wrappedDek, second.wrappedDek), 'wrapped DEK must differ because salt and IV differ')
 })
 
-test('passphraseKey derives a non-extractable AES-GCM key from the passphrase', async () => {
+test('passphraseKey derives an AES-GCM key from the passphrase', async () => {
   const salt = randomBytes(16)
   const key = await passphraseKey('correct horse battery staple', salt)
   assert.equal(key.algorithm.name, 'AES-GCM')
   assert.equal(key.algorithm.length, 256)
+  // The KEK itself is non-extractable: the passphrase bytes are only used
+  // to derive a key handle that lives inside WebCrypto, never persisted.
   assert.equal(key.extractable, false, 'derived KEK must never be exportable')
   assert.deepEqual(key.usages, ['encrypt', 'decrypt'])
 })
@@ -71,7 +74,11 @@ test('unwrapDek round-trips for the correct passphrase and exact AAD context', a
     wrapped_dek: wrappedDek,
   }
   const restored = await unwrapDek('device-a', 'correct horse battery staple', record)
-  assert.equal(restored.extractable, false, 'restored DEK must be non-extractable')
+  // The DEK is extractable within the worker scope so `rewrapDekRaw` can
+  // re-encrypt it under a fresh KEK without re-encrypting state. The
+  // trust boundary is the Web Worker, so the raw bytes only ever live
+  // inside worker scope and are zeroed as soon as the wrap cycle ends.
+  assert.equal(restored.extractable, true, 'restored DEK must be extractable inside the worker trust boundary')
 
   // Sanity-check that the restored DEK actually decrypts data encrypted by the original DEK.
   const iv = randomBytes(12)
@@ -149,4 +156,90 @@ test('vault record shape matches the documented v2 schema', () => {
   for (const key of Object.keys(fixture.kdf.parameters)) {
     assert.ok(allowedKdfParameters.includes(key), `kdf.parameters key "${key}" must be in the v2 schema`)
   }
+})
+
+test('changePassphrase re-wraps the DEK under a fresh salt without re-encrypting state', async () => {
+  // The changePassphrase flow lives in mls.worker.js next to IndexedDB.
+  // We exercise the pure-crypto part of the flow here so that the contract
+  // is locked at the test boundary: the DEK is preserved, the salt and
+  // wrap_iv are fresh, and state_ciphertext + state_iv survive unchanged.
+  const initial = await wrapNewDek('device-a', 'correct horse battery staple')
+  const dek = initial.dek
+  const statePlaintext = encoder.encode('opaque MLS state payload for changePassphrase test')
+  const stateIv = randomBytes(12)
+  const stateCiphertextBytes = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: stateIv, additionalData: vaultAad('device-a', 'state') },
+    dek,
+    statePlaintext,
+  ))
+  const originalRecord = {
+    version: 2,
+    device_id: 'device-a',
+    kdf: { name: 'PBKDF2-HMAC-SHA-256', salt: initial.salt, parameters: { iterations: PBKDF2_ITERATIONS } },
+    wrapped_dek: initial.wrappedDek,
+    wrap_iv: initial.wrapIv,
+    state_ciphertext: stateCiphertextBytes,
+    state_iv: stateIv,
+    updated_at: '2026-08-07T00:00:00.000Z',
+  }
+
+  // Simulate the worker flow: unwrap with old, re-wrap the SAME DEK with new.
+  const restoredDek = await unwrapDek('device-a', 'correct horse battery staple', {
+    kdf: { salt: originalRecord.kdf.salt, parameters: originalRecord.kdf.parameters },
+    wrap_iv: originalRecord.wrap_iv,
+    wrapped_dek: originalRecord.wrapped_dek,
+  })
+  const rewrapped = await rewrapDekRaw(restoredDek, 'device-a', 'a stronger passphrase than before')
+  const nextRecord = {
+    ...originalRecord,
+    kdf: { ...originalRecord.kdf, salt: rewrapped.salt },
+    wrapped_dek: rewrapped.wrappedDek,
+    wrap_iv: rewrapped.wrapIv,
+    updated_at: new Date().toISOString(),
+  }
+
+  // The DEK is the same logical key: the re-wrap round-trip must decrypt
+  // the original state_ciphertext with no change to state bytes.
+  const plaintext = new Uint8Array(await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: originalRecord.state_iv, additionalData: vaultAad('device-a', 'state') },
+    restoredDek,
+    originalRecord.state_ciphertext,
+  ))
+  assert.deepEqual(plaintext, statePlaintext, 'restored DEK must decrypt the original state bytes')
+
+  // And independently: unwrap under the new passphrase also yields the
+  // same logical DEK, which can decrypt the same state_ciphertext.
+  const restoredAgain = await unwrapDek('device-a', 'a stronger passphrase than before', {
+    kdf: { salt: nextRecord.kdf.salt, parameters: nextRecord.kdf.parameters },
+    wrap_iv: nextRecord.wrap_iv,
+    wrapped_dek: nextRecord.wrapped_dek,
+  })
+  const plaintextAgain = new Uint8Array(await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: originalRecord.state_iv, additionalData: vaultAad('device-a', 'state') },
+    restoredAgain,
+    originalRecord.state_ciphertext,
+  ))
+  assert.deepEqual(plaintextAgain, statePlaintext, 'new passphrase unwrap must yield the same DEK')
+
+  // state_ciphertext and state_iv are not touched by a re-wrap.
+  assert.ok(bytesEqual(nextRecord.state_ciphertext, originalRecord.state_ciphertext),
+    'state_ciphertext must survive the re-wrap unchanged')
+  assert.ok(bytesEqual(nextRecord.state_iv, originalRecord.state_iv),
+    'state_iv must survive the re-wrap unchanged')
+
+  // Salt and wrap_iv must rotate; otherwise we are not protecting against a
+  // stolen ciphertext.
+  assert.ok(!bytesEqual(nextRecord.kdf.salt, originalRecord.kdf.salt),
+    'salt must rotate on re-wrap')
+  assert.ok(!bytesEqual(nextRecord.wrap_iv, originalRecord.wrap_iv),
+    'wrap_iv must rotate on re-wrap')
+  assert.ok(!bytesEqual(nextRecord.wrapped_dek, originalRecord.wrapped_dek),
+    'wrapped_dek must rotate on re-wrap')
+
+  // The old passphrase no longer unwraps the new record.
+  await assert.rejects(unwrapDek('device-a', 'correct horse battery staple', {
+    kdf: { salt: nextRecord.kdf.salt, parameters: nextRecord.kdf.parameters },
+    wrap_iv: nextRecord.wrap_iv,
+    wrapped_dek: nextRecord.wrapped_dek,
+  }), /AES-GCM|operation/i)
 })

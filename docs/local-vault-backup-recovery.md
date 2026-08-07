@@ -36,10 +36,14 @@ Each device's vault is a single record in the `state` object store of the
 Cryptographic wiring:
 
 - A random 256-bit Data Encryption Key (DEK) is generated for the device
-  when the vault is created. The DEK never leaves WebCrypto and is marked
-  non-extractable, so the JS worker holds an opaque handle to it only.
+  when the vault is created. The DEK is held as an extractable
+  `CryptoKey` inside the MLS Web Worker so that `changePassphrase` can
+  re-wrap it under a fresh KEK without re-encrypting MLS state. The
+  trust boundary is the Web Worker itself: raw DEK bytes live only in
+  worker scope and are zeroed as soon as the wrap/unwrap cycle finishes.
+  IndexedDB only ever sees the wrapped form.
 - The user passphrase runs through PBKDF2-HMAC-SHA-256 with the record's
-  salt and stored iteration count. The derived key is also non-extractable
+  salt and stored iteration count. The derived key is non-extractable
   and is used solely as a Key Encryption Key (KEK) to wrap the DEK.
 - Wrapping uses AES-256-GCM with a fresh 12-byte nonce and AAD
   `secure-messenger:v2:<device_id>:dek`.
@@ -77,6 +81,43 @@ The migration flow is:
 
 If the v2 write fails for any reason, the worker restores the v1 record
 and zeroes the temporary plaintext buffer.
+
+## Vault operations
+
+The bridge exposes the six operations required by ADR-0002:
+
+| Method | Behaviour |
+| --- | --- |
+| `createVault(deviceId, passphrase)` | Wraps a fresh DEK under a new salt and writes the v2 record. Rejects if a v2 record already exists. |
+| `unlockVault(deviceId, passphrase)` | Re-derives the KEK, unwraps the DEK, returns it to the Worker. |
+| `lockMlsRuntime()` | Rejects all pending Worker requests, calls the worker's `lock` handler, then `worker.terminate()` so the WASM linear memory is released. |
+| `changePassphrase(deviceId, oldPassphrase, newPassphrase)` | Re-wraps the same DEK under a fresh salt and IV without re-encrypting `state_ciphertext`. |
+| `hasVault(deviceId)` | Convenience boolean wrapper around `getVaultStatus`. |
+| `getVaultStatus(deviceId)` | Returns `{ exists, version, locked, migrationRequired }`. |
+
+After `lockMlsRuntime()` the runtime guarantees:
+
+- The Worker is destroyed and its WASM linear memory is released.
+- Every key handle inside the Worker is dropped. The DEK is extractable
+  inside the worker (so it can be re-wrapped without re-encrypting
+  state), but the Worker itself is the trust boundary: raw bytes never
+  cross the postMessage boundary, and they are zeroed from worker scope
+  as soon as the wrap/unwrap cycle ends.
+- Pending bridge requests are rejected with `MLS runtime was locked
+  before the request completed`; no caller hangs.
+- The next `encryptAndPublish` / `decryptEnvelope` call invokes the
+  worker's `requireUnlocked` precondition and throws
+  `Browser vault is locked`, which the UI surfaces as
+  `Sending is disabled: this runtime has no MLS vault`.
+- The MLS state at rest in IndexedDB remains encrypted under the DEK.
+  `state_ciphertext` and `state_iv` are wiped from in-memory references
+  during `lock` and overwritten on the next unlock-then-persist cycle.
+
+Plaintext MLS state is **never** written to IndexedDB or
+`localStorage` — `readOutbox` and `writeOutbox` in `ChatApp.jsx` are
+deliberate no-ops, and React state for drafts and pending messages is
+held in `useRef` references that are dropped when the chat view
+unmounts.
 
 ## Backup and recovery
 

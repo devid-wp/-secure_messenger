@@ -1,5 +1,5 @@
 import initWasm, { WasmMlsClient } from './wasm-generated/mls.js'
-import { PBKDF2_ITERATIONS, randomBytes, unwrapDek, vaultAad, wrapNewDek } from './vaultCrypto.js'
+import { PBKDF2_ITERATIONS, randomBytes, rewrapDekRaw, unwrapDek, vaultAad, wrapNewDek } from './vaultCrypto.js'
 
 const DB_NAME = 'secure-messenger-mls-v1'
 const DB_VERSION = 1
@@ -90,6 +90,49 @@ async function createV2Record(deviceId, passphrase, state = new Uint8Array()) {
   return record
 }
 
+async function rewrapDek(deviceId, oldPassphrase, newPassphrase) {
+  const record = await readStore('state', deviceId)
+  if (!validV2(record, deviceId)) throw new Error('Invalid browser vault record')
+  const dek = await unwrapDek(deviceId, oldPassphrase, record)
+  // Re-wrap the same DEK under a fresh salt and IV. The DEK is preserved
+  // so the state_ciphertext on the record stays valid; only the wrap
+  // (kdf salt + wrapped_dek + wrap_iv) rotates.
+  const wrapped = await rewrapDekRaw(dek, deviceId, newPassphrase)
+  const previousWrapped = record.wrapped_dek
+  const previousWrapIv = record.wrap_iv
+  const previousSalt = record.kdf.salt
+  const next = {
+    ...record,
+    kdf: { ...record.kdf, salt: wrapped.salt },
+    wrapped_dek: wrapped.wrappedDek,
+    wrap_iv: wrapped.wrapIv,
+    updated_at: new Date().toISOString(),
+  }
+  try {
+    await writeStore('state', deviceId, next)
+  } catch (error) {
+    activeDek = null
+    throw error
+  }
+  activeDek = dek
+  zeroBytes(previousWrapped)
+  zeroBytes(previousWrapIv)
+  zeroBytes(previousSalt)
+  return next
+}
+
+function zeroBytes(view) {
+  if (!view) return
+  if (view instanceof Uint8Array) view.fill(0)
+  else if (view instanceof ArrayBuffer) new Uint8Array(view).fill(0)
+  else if (ArrayBuffer.isView(view)) view.buffer && new Uint8Array(view.buffer, view.byteOffset, view.byteLength).fill(0)
+}
+
+function requireUnlocked() {
+  if (!activeDek) throw new Error('Browser vault is locked')
+  if (!activeDeviceId) throw new Error('Browser vault has no active device')
+}
+
 function validV2(record, deviceId) {
   return record?.version === 2 && record.device_id === deviceId
     && record.kdf?.name === 'PBKDF2-HMAC-SHA-256'
@@ -122,8 +165,8 @@ async function loadState(deviceId) {
 
 async function persist() {
   if (!client || !activeDeviceId) throw new Error('MLS worker is locked')
+  requireUnlocked()
   const plaintext = client.export_state()
-  if (!activeDek) throw new Error('Browser vault is locked')
   const iv = randomBytes(12)
   const ciphertext = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv, additionalData: vaultAad(activeDeviceId, 'state') }, activeDek, plaintext
@@ -173,6 +216,16 @@ const handlers = {
     await unlockV2(deviceId, passphrase)
     return true
   },
+  async changePassphrase({ deviceId, oldPassphrase, newPassphrase }) {
+    if (typeof oldPassphrase !== 'string' || typeof newPassphrase !== 'string') {
+      throw new Error('Both old and new passphrases are required')
+    }
+    if (oldPassphrase.length < 10 || newPassphrase.length < 10) {
+      throw new Error('Vault passphrase must contain at least 10 characters')
+    }
+    activeDeviceId = deviceId
+    return rewrapDek(deviceId, oldPassphrase, newPassphrase)
+  },
   async initialize({ deviceId, packageCount }) {
     if (!wasmReady) wasmReady = initWasm()
     await wasmReady
@@ -188,33 +241,56 @@ const handlers = {
       keyPackages: result.key_packages.map(fromBase64),
     }
   },
-  async createGroup({ chatId }) { const value = parse(client.create_group(String(chatId))); await persist(); return value },
+  async createGroup({ chatId }) {
+    requireUnlocked()
+    const value = parse(client.create_group(String(chatId))); await persist(); return value
+  },
   async members({ chatId }) { return parse(client.group_members(String(chatId))) },
   async addMembers({ chatId, keyPackages }) {
+    requireUnlocked()
     const value = parse(client.add_members(String(chatId), JSON.stringify(keyPackages)))
     await persist()
     return { commit: fromBase64(value.commit), welcome: fromBase64(value.welcome), epoch: value.epoch }
   },
-  async join({ welcome }) { const value = parse(client.join_group(welcome)); await persist(); return value },
+  async join({ welcome }) {
+    requireUnlocked()
+    const value = parse(client.join_group(welcome)); await persist(); return value
+  },
   async encrypt({ chatId, plaintext }) {
+    requireUnlocked()
     const value = parse(client.encrypt(String(chatId), plaintext)); await persist()
     return { ciphertext: fromBase64(value.message), epoch: value.epoch }
   },
   async process({ chatId, message }) {
+    requireUnlocked()
     const value = parse(client.process(String(chatId), message)); await persist()
     if (value.plaintext) value.plaintext = fromBase64(value.plaintext)
     return value
   },
   async cached({ message }) { const value = client.cached_application(message); return value ? fromBase64(value) : null },
   async remove({ chatId, deviceIds }) {
+    requireUnlocked()
     const value = parse(client.remove_devices(String(chatId), JSON.stringify(deviceIds))); await persist()
     return { commit: fromBase64(value.message), epoch: value.epoch }
   },
   async update({ chatId }) {
+    requireUnlocked()
     const value = parse(client.self_update(String(chatId))); await persist()
     return { commit: fromBase64(value.message), epoch: value.epoch }
   },
-  async lock() { client = null; activeDek = null; activeDeviceId = null; return true },
+  async lock() {
+    // Best-effort: tell the WASM client to drop its state, then null every
+    // in-memory reference so the only way to use the vault again is to
+    // unlock it. The Worker is terminated by the bridge; once it is gone,
+    // WebAssembly linear memory is released by the runtime.
+    if (client && typeof client.destroy === 'function') {
+      try { client.destroy() } catch { /* best-effort */ }
+    }
+    client = null
+    activeDek = null
+    activeDeviceId = null
+    return true
+  },
 }
 
 self.onmessage = async ({ data }) => {
