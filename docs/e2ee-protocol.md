@@ -116,6 +116,100 @@ Supported types are `message`, `edit`, `delete`, `reaction`, `receipt`,
 `attachment`, `group_metadata`, and `device_event`. Unknown versions, types,
 top-level fields, malformed UUID/timestamps, mutation targets, and payloads over
 64 KiB are rejected after authenticated MLS decryption and before rendering.
+
+#### Per-type body schemas
+
+| Type | Required body fields | Optional body fields |
+|---|---|---|
+| `message` | `kind` | `text`, `content`, `sticker` |
+| `edit` | `target_client_id` (UUID), `content` (non-empty string) | – |
+| `delete` | `target_client_id` (UUID) | – |
+| `reaction` | `target_client_id` (UUID), `emoji` (non-empty string) | – |
+| `receipt` | `target_client_id` (UUID), `state` ∈ {`delivered`,`read`} | – |
+| `attachment` | `attachment_descriptor` | – |
+| `group_metadata` | `name` (non-empty string) | – |
+| `device_event` | `event` | – |
+
+The wire body MUST NOT carry any of these fields — they are stripped before
+encryption and rejected after decryption:
+
+```
+sender, sender_login, sender_device_id, username, display_name,
+reply_to, reply_preview, thread_id, parent_client_id,
+attachment, file_name, mime_type, media_type, media_url, object_url,
+group_name, chat_name, topic,
+edited_at, deleted_at, read_at, timestamp,
+id, chat_id, server_seq, status, mls_epoch,
+reaction_emoji
+```
+
+`edit`, `delete`, `reaction` and `receipt` MUST reference the original
+message via a UUID `target_client_id`; the receiving device MUST ignore a
+mutation that targets an unknown or foreign client_id.
+
+#### Application payload validation rules
+
+`decodeApplicationPayload` rejects, after authenticated MLS decryption:
+
+- non-`Uint8Array` bytes or empty payload;
+- any payload whose size exceeds `MAX_APPLICATION_PAYLOAD_BYTES` (64 KiB);
+- bytes that are not valid UTF-8;
+- JSON parse failures;
+- unknown top-level fields;
+- `version` other than `1`;
+- `type` not in the supported allowlist;
+- `client_id` that is not a RFC 4122 variant-1 UUID;
+- `sent_at` that is not a strict ISO-8601 timestamp;
+- body fields not in the per-type schema or fields forbidden above;
+- missing required body fields for the given type;
+- `attachment_descriptor` carrying `name`, `file_name`, `mime_type`,
+  `media_type`, an unknown `algorithm`, an unknown `version` or a non-UUID
+  `object_id`.
+
+`encodeApplicationPayload` rejects the same conditions in reverse — it
+throws before MLS encryption if the caller did not supply a valid
+`client_id` UUID, an ISO-8601 `sent_at` (or `timestamp` fallback) and the
+required body fields for the inferred type. Local UI bookkeeping fields
+are stripped before encryption.
+
+#### External MLS envelope (server wire format)
+
+The HTTP envelope that wraps an opaque MLS ciphertext is exactly:
+
+```json
+{
+  "protocol_version": 1,
+  "chat_id": 123,
+  "content_type": "application",
+  "epoch": 7,
+  "payload": "<base64 MLS bytes>",
+  "recipient_device_id": null
+}
+```
+
+`content_type` is one of `application`, `commit`, `proposal`, `welcome`;
+`payload` is the raw MLS ciphertext bytes encoded as base64; the
+envelope MUST be rejected if `payload` exceeds 1 MiB or if
+`content_type == "welcome"` without a `recipient_device_id`.
+
+The envelope MUST NOT contain, and the server MUST reject with HTTP 422
+when any of the following fields appear (enforced by Pydantic
+`extra="forbid"` on the publish model):
+
+```
+text, content, body, sender, sender_name, sender_login,
+file_name, mime_type, media_type, object_url,
+reply_preview, reply_to, thread_id,
+group_name, chat_name, topic,
+reaction, reaction_emoji,
+edited_at, deleted_at, read_at
+```
+
+The server stores `payload` as opaque bytes and never attempts to parse,
+decrypt, or display its contents. `protocol_version` is pinned to `1` by a
+database check constraint; future wire-format changes require a new ADR
+and a new migration.
+
 - Welcome доставляется только адресованным device IDs.
 - KeyPackage одноразовый; использованный package удаляется атомарно.
 - Клиент ограничивает skipped generations и максимальный скачок epoch.

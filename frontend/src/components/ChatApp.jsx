@@ -857,8 +857,9 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     if (!editText.trim() || !editingMessage) return
     try {
       await encryptAndPublish(token, editingMessage.chat_id, {
+        client_id: crypto.randomUUID(),
+        sent_at: new Date().toISOString(),
         operation: 'edit',
-        sender: login,
         target_client_id: editingMessage.client_id,
         content: editText.trim(),
       })
@@ -879,7 +880,9 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     if (!window.confirm('Delete this message?')) return
     try {
       await encryptAndPublish(token, message.chat_id, {
-        operation: 'delete', sender: login, target_client_id: message.client_id,
+        client_id: crypto.randomUUID(),
+        sent_at: new Date().toISOString(),
+        operation: 'delete', target_client_id: message.client_id,
       })
       setMessages((previous) => previous.map((item) => (
         item.client_id === message.client_id
@@ -947,6 +950,8 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     let group = await response.json()
     await synchronizeMlsGroup(token, deviceId, group.id)
     await encryptAndPublish(token, group.id, {
+      client_id: crypto.randomUUID(),
+      sent_at: new Date().toISOString(),
       operation: 'group_metadata',
       name: groupName.trim(),
     })

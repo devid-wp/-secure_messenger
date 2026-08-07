@@ -25,6 +25,7 @@ from app.schemas import (
 
 router = APIRouter(prefix="/e2ee", tags=["e2ee"])
 MLS_CIPHER_SUITE = 1
+MLS_PROTOCOL_VERSION = 1
 
 
 def _envelope_response(envelope: MlsEnvelope) -> dict:
@@ -33,6 +34,7 @@ def _envelope_response(envelope: MlsEnvelope) -> dict:
         "chat_id": envelope.chat_id,
         "sender_device_id": envelope.sender_device_id,
         "recipient_device_id": envelope.recipient_device_id,
+        "protocol_version": envelope.protocol_version,
         "epoch": envelope.epoch,
         "content_type": envelope.content_type,
         "payload": base64.b64encode(envelope.payload).decode("ascii"),
@@ -74,6 +76,7 @@ async def publish_mls_envelope(
         chat_id=chat_id,
         sender_device_id=current_device.id,
         recipient_device_id=request_body.recipient_device_id,
+        protocol_version=MLS_PROTOCOL_VERSION,
         epoch=request_body.epoch,
         content_type=request_body.content_type,
         payload=payload,

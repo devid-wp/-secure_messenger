@@ -522,6 +522,7 @@ class MlsEnvelope(Base):
             name="content_type",
         ),
         CheckConstraint("length(payload) BETWEEN 1 AND 1048576", name="payload_size"),
+        CheckConstraint("protocol_version = 1", name="ck_mls_envelope_protocol_version"),
         UniqueConstraint("sender_device_id", "message_hash", name="uq_mls_envelope_sender_hash"),
         Index("ix_mls_envelopes_chat_id_id", "chat_id", "id"),
     )
@@ -529,6 +530,7 @@ class MlsEnvelope(Base):
     chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
     sender_device_id: Mapped[str] = mapped_column(ForeignKey("devices.id", ondelete="RESTRICT"), nullable=False)
     recipient_device_id: Mapped[Optional[str]] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))
+    protocol_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     epoch: Mapped[int] = mapped_column(Integer, nullable=False)
     content_type: Mapped[str] = mapped_column(String(16), nullable=False)
     payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)

@@ -88,8 +88,16 @@ class KeyPackageInventory(BaseModel):
 
 
 class MlsEnvelopePublish(BaseModel):
+    # Wire-level envelope around an opaque MLS ciphertext. The server MUST NOT
+    # parse `payload` or store any field derived from its plaintext. Only
+    # routing metadata is allowed here: protocol version, chat, epoch, content
+    # kind, the ciphertext itself, and the optional welcome recipient.
+    # `extra="forbid"` rejects any field that could leak message text, sender
+    # name, file name, MIME type, reply preview, group name, reaction or edit
+    # information.
     model_config = ConfigDict(extra="forbid")
 
+    protocol_version: Literal[1] = 1
     epoch: int = Field(ge=0)
     content_type: Literal["application", "commit", "proposal", "welcome"]
     payload: Base64Bytes = Field(min_length=1, max_length=1_048_576)
@@ -97,10 +105,14 @@ class MlsEnvelopePublish(BaseModel):
 
 
 class MlsEnvelopeResponse(BaseModel):
+    # Read-only mirror of MlsEnvelopePublish plus server-side routing fields.
+    # Mirrors the same forbidden-fields policy: chat_id, sender_device_id and
+    # created_at are routing metadata only and never carry plaintext.
     id: int
     chat_id: int
     sender_device_id: str
     recipient_device_id: str | None
+    protocol_version: int
     epoch: int
     content_type: str
     payload: Base64Bytes

@@ -186,6 +186,7 @@ class E2eeDeliveryApiTests(unittest.TestCase):
         chat_id = chat_response.json()["id"]
         ciphertext = b"opaque-openmls-wire-data"
         body = {
+            "protocol_version": 1,
             "epoch": 1,
             "content_type": "application",
             "payload": self.encoded(ciphertext),
@@ -213,6 +214,7 @@ class E2eeDeliveryApiTests(unittest.TestCase):
             f"/api/v1/e2ee/chats/{chat_id}/envelopes",
             headers=self.headers(alice),
             json={
+                "protocol_version": 1,
                 "epoch": 1,
                 "content_type": "welcome",
                 "payload": self.encoded(b"opaque-welcome"),
@@ -258,7 +260,13 @@ class E2eeDeliveryApiTests(unittest.TestCase):
         rejected = self.client.post(
             f"/api/v1/e2ee/chats/{chat_id}/envelopes",
             headers=self.headers(alice),
-            json={"epoch": 0, "content_type": "application", "payload": self.encoded(b"opaque"), "content": sentinel},
+            json={
+                "protocol_version": 1,
+                "epoch": 0,
+                "content_type": "application",
+                "payload": self.encoded(b"opaque"),
+                "content": sentinel,
+            },
         )
         self.assertEqual(rejected.status_code, 422, rejected.text)
         with self.client.websocket_connect(
@@ -286,3 +294,96 @@ class E2eeDeliveryApiTests(unittest.TestCase):
         self.assertNotIn("name", created.json())
         self.assertNotIn("last_message", created.json())
         self.assertNotIn("unread_count", created.json())
+
+    def test_envelope_accepts_protocol_version_and_exposes_it(self) -> None:
+        alice, _ = self.register_and_login("alice-envelope-version")
+        bob, _ = self.register_and_login("bob-envelope-version")
+        self.publish_identity(alice, 21)
+        self.publish_identity(bob, 22)
+        chat_id = self.client.post(
+            "/api/v1/chats/dm",
+            headers=self.headers(alice),
+            json={"login": "bob-envelope-version"},
+        ).json()["id"]
+        published = self.client.post(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes",
+            headers=self.headers(alice),
+            json={
+                "protocol_version": 1,
+                "epoch": 0,
+                "content_type": "application",
+                "payload": self.encoded(b"opaque"),
+                "recipient_device_id": None,
+            },
+        )
+        self.assertEqual(published.status_code, 201, published.text)
+        body = published.json()
+        self.assertEqual(body["protocol_version"], 1)
+        self.assertEqual(body["chat_id"], chat_id)
+        self.assertEqual(body["content_type"], "application")
+        self.assertIsNone(body["recipient_device_id"])
+        # The envelope MUST NOT carry any of the forbidden plaintext fields.
+        for forbidden in (
+            "text", "content", "body", "sender", "sender_name",
+            "file_name", "mime_type", "media_type", "reply_preview",
+            "group_name", "reaction", "edited_at",
+        ):
+            self.assertNotIn(forbidden, body)
+
+    def test_envelope_rejects_unknown_protocol_version(self) -> None:
+        token, _ = self.register_and_login("alice-envelope-bad-version")
+        bob, _ = self.register_and_login("bob-envelope-bad-version")
+        self.publish_identity(token, 31)
+        self.publish_identity(bob, 32)
+        chat_id = self.client.post(
+            "/api/v1/chats/dm",
+            headers=self.headers(token),
+            json={"login": "bob-envelope-bad-version"},
+        ).json()["id"]
+        response = self.client.post(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes",
+            headers=self.headers(token),
+            json={
+                "protocol_version": 2,
+                "epoch": 0,
+                "content_type": "application",
+                "payload": self.encoded(b"opaque"),
+            },
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+
+    def test_envelope_rejects_each_forbidden_plaintext_field(self) -> None:
+        alice, _ = self.register_and_login("alice-envelope-forbidden")
+        bob, _ = self.register_and_login("bob-envelope-forbidden")
+        self.publish_identity(alice, 41)
+        self.publish_identity(bob, 42)
+        chat_id = self.client.post(
+            "/api/v1/chats/dm",
+            headers=self.headers(alice),
+            json={"login": "bob-envelope-forbidden"},
+        ).json()["id"]
+        for forbidden in (
+            "text", "content", "body", "sender", "sender_name",
+            "file_name", "mime_type", "media_type", "reply_preview",
+            "group_name", "reaction", "edited_at",
+        ):
+            response = self.client.post(
+                f"/api/v1/e2ee/chats/{chat_id}/envelopes",
+                headers=self.headers(alice),
+                json={
+                    "protocol_version": 1,
+                    "epoch": 0,
+                    "content_type": "application",
+                    "payload": self.encoded(b"opaque"),
+                    forbidden: "leak",
+                },
+            )
+            self.assertEqual(
+                response.status_code, 422,
+                f"{forbidden} must be rejected",
+            )
+        with sqlite3.connect(self.database_path) as connection:
+            self.assertEqual(
+                connection.execute("SELECT count(*) FROM mls_envelopes").fetchone()[0],
+                0,
+            )

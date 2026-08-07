@@ -1,17 +1,252 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { decodeApplicationPayload, encodeApplicationPayload, validateApplicationPayload } from '../src/crypto/applicationPayload.js'
+import {
+  APPLICATION_PAYLOAD_TYPES,
+  APPLICATION_PAYLOAD_VERSION,
+  MAX_APPLICATION_PAYLOAD_BYTES,
+  decodeApplicationPayload,
+  encodeApplicationPayload,
+  validateApplicationPayload,
+} from '../src/crypto/applicationPayload.js'
 
-test('round trips a versioned message payload', () => {
-  const clientId = crypto.randomUUID()
-  const decoded = decodeApplicationPayload(encodeApplicationPayload({ client_id: clientId, kind: 'text', content: 'secret' }))
-  assert.equal(decoded.client_id, clientId)
-  assert.equal(decoded.content, 'secret')
+const ISO = '2026-08-07T12:34:56.000Z'
+
+function clientId() {
+  return crypto.randomUUID()
+}
+
+function baseMessage(overrides = {}) {
+  return {
+    version: APPLICATION_PAYLOAD_VERSION,
+    type: 'message',
+    client_id: clientId(),
+    sent_at: ISO,
+    body: { kind: 'text', content: 'hello' },
+    ...overrides,
+  }
+}
+
+test('module exports the protocol constants', () => {
+  assert.equal(APPLICATION_PAYLOAD_VERSION, 1)
+  assert.equal(MAX_APPLICATION_PAYLOAD_BYTES, 64 * 1024)
+  assert.deepEqual(APPLICATION_PAYLOAD_TYPES, [
+    'message', 'edit', 'delete', 'reaction', 'receipt',
+    'attachment', 'group_metadata', 'device_event',
+  ])
 })
 
-test('rejects unknown versions, fields and invalid mutation targets', () => {
-  const base = { version: 1, type: 'message', client_id: crypto.randomUUID(), sent_at: new Date().toISOString(), body: {} }
-  assert.throws(() => validateApplicationPayload({ ...base, version: 2 }))
-  assert.throws(() => validateApplicationPayload({ ...base, critical: true }))
-  assert.throws(() => validateApplicationPayload({ ...base, type: 'edit' }))
+test('encode then decode round-trips a text message', () => {
+  const id = clientId()
+  const decoded = decodeApplicationPayload(encodeApplicationPayload({
+    client_id: id,
+    sent_at: ISO,
+    kind: 'text',
+    content: 'secret',
+  }))
+  assert.equal(decoded.client_id, id)
+  assert.equal(decoded.sent_at, ISO)
+  assert.equal(decoded.content, 'secret')
+  assert.equal(decoded.kind, 'text')
+  assert.equal(decoded.type, 'message')
+})
+
+test('encode strips local UI fields and survives the forbidden-field check', () => {
+  const id = clientId()
+  const bytes = encodeApplicationPayload({
+    client_id: id,
+    sent_at: ISO,
+    kind: 'text',
+    content: 'hello',
+    sender: 'alice',
+    sender_login: 'alice',
+    timestamp: ISO,
+    id: 'pending:abc',
+    chat_id: 7,
+    server_seq: 12,
+    status: 'sending',
+    mls_epoch: 0,
+    reply_preview: 'preview',
+    file_name: 'evil.txt',
+    mime_type: 'text/plain',
+    group_name: 'leak',
+  })
+  const payload = JSON.parse(new TextDecoder().decode(bytes))
+  assert.equal(payload.client_id, id)
+  assert.equal(payload.sent_at, ISO)
+  assert.equal(payload.body.content, 'hello')
+  assert.equal(payload.body.kind, 'text')
+  for (const forbidden of [
+    'sender', 'sender_login', 'timestamp', 'id', 'chat_id',
+    'server_seq', 'status', 'mls_epoch', 'reply_preview',
+    'file_name', 'mime_type', 'group_name',
+  ]) {
+    assert.ok(!(forbidden in payload.body), `${forbidden} must be stripped`)
+  }
+})
+
+test('decode rejects payloads carrying forbidden fields', () => {
+  const bytes = new TextEncoder().encode(JSON.stringify({
+    ...baseMessage(),
+    body: { kind: 'text', content: 'hi', sender: 'alice' },
+  }))
+  assert.throws(() => decodeApplicationPayload(bytes), /forbidden/)
+})
+
+test('rejects unknown top-level fields', () => {
+  assert.throws(() => validateApplicationPayload({ ...baseMessage(), critical: true }), /Unknown/)
+})
+
+test('rejects unknown versions and unknown types', () => {
+  assert.throws(() => validateApplicationPayload({ ...baseMessage(), version: 2 }), /version/)
+  assert.throws(() => validateApplicationPayload({ ...baseMessage(), type: 'broadcast' }), /type/)
+  assert.throws(() => validateApplicationPayload({ ...baseMessage({ type: 'message' }), type: 'draft' }), /type/)
+})
+
+test('rejects invalid client_id UUIDs', () => {
+  assert.throws(() => validateApplicationPayload({ ...baseMessage(), client_id: 'not-a-uuid' }), /UUID/)
+  assert.throws(() => validateApplicationPayload({ ...baseMessage(), client_id: 42 }), /UUID/)
+  assert.throws(() => validateApplicationPayload({ ...baseMessage(), client_id: '00000000-0000-0000-0000-000000000000' }), /UUID/)
+})
+
+test('rejects non ISO-8601 sent_at', () => {
+  assert.throws(() => validateApplicationPayload({ ...baseMessage(), sent_at: 'tomorrow' }), /ISO-8601/)
+  assert.throws(() => validateApplicationPayload({ ...baseMessage(), sent_at: '2026-08-07' }), /ISO-8601/)
+  assert.throws(() => validateApplicationPayload({ ...baseMessage(), sent_at: 123 }), /ISO-8601/)
+})
+
+test('edit and delete require a UUID target_client_id', () => {
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(),
+    type: 'edit',
+    body: { target_client_id: 'not-uuid', content: 'x' },
+  }), /target_client_id/)
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(),
+    type: 'delete',
+    body: { target_client_id: clientId().replace(/-/g, 'x') },
+  }), /target_client_id/)
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(),
+    type: 'edit',
+    body: { target_client_id: clientId() }, // missing content
+  }), /content/)
+})
+
+test('reaction and receipt validate emoji and state', () => {
+  const tid = clientId()
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(),
+    type: 'reaction',
+    body: { target_client_id: tid, emoji: '' },
+  }), /emoji/)
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(),
+    type: 'receipt',
+    body: { target_client_id: tid, state: 'pending' },
+  }), /state/)
+  const ok = validateApplicationPayload({
+    ...baseMessage(),
+    type: 'receipt',
+    body: { target_client_id: tid, state: 'read' },
+  })
+  assert.equal(ok.body.state, 'read')
+})
+
+test('group_metadata requires a non-empty string name', () => {
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(),
+    type: 'group_metadata',
+    body: { name: '' },
+  }), /name/)
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(),
+    type: 'group_metadata',
+    body: { name: 5 },
+  }), /name/)
+})
+
+test('attachment descriptor must not carry filename or MIME type', () => {
+  const descriptor = {
+    version: 1,
+    algorithm: 'AES-256-GCM',
+    object_id: clientId(),
+    key: 'base64',
+    nonce: 'base64',
+  }
+  assert.doesNotThrow(() => validateApplicationPayload({
+    ...baseMessage(),
+    type: 'attachment',
+    body: { attachment_descriptor: descriptor },
+  }))
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(),
+    type: 'attachment',
+    body: { attachment_descriptor: { ...descriptor, name: 'leak.txt' } },
+  }), /filename or MIME/)
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(),
+    type: 'attachment',
+    body: { attachment_descriptor: { ...descriptor, media_type: 'image/png' } },
+  }), /filename or MIME/)
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(),
+    type: 'attachment',
+    body: { attachment_descriptor: { ...descriptor, algorithm: 'AES-256-CBC' } },
+  }), /algorithm/)
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(),
+    type: 'attachment',
+    body: { attachment_descriptor: { ...descriptor, object_id: 'not-uuid' } },
+  }), /object_id/)
+})
+
+test('decode rejects non-UTF-8 and non-JSON corruption', () => {
+  assert.throws(() => decodeApplicationPayload(new Uint8Array([0xff, 0xfe, 0xfd])), /UTF-8|JSON|valid|bytes/)
+  assert.throws(() => decodeApplicationPayload(new TextEncoder().encode('not-json')), /JSON/)
+  assert.throws(() => decodeApplicationPayload(null), /bytes/)
+  assert.throws(() => decodeApplicationPayload(new Uint8Array(0)), /size/)
+})
+
+test('decode rejects oversized payloads', () => {
+  const huge = new Uint8Array(MAX_APPLICATION_PAYLOAD_BYTES + 1)
+  assert.throws(() => decodeApplicationPayload(huge), /size/)
+})
+
+test('encode rejects missing client_id and missing sent_at', () => {
+  assert.throws(() => encodeApplicationPayload({ kind: 'text', content: 'hi' }), /client_id/)
+  assert.throws(() => encodeApplicationPayload({
+    client_id: clientId(),
+    kind: 'text',
+    content: 'hi',
+  }), /sent_at/)
+})
+
+test('encode strips forbidden fields instead of failing', () => {
+  const bytes = encodeApplicationPayload({
+    client_id: clientId(),
+    sent_at: ISO,
+    kind: 'text',
+    content: 'hello',
+    sender: 'alice',
+    file_name: 'evil.txt',
+    reply_preview: 'preview',
+  })
+  const payload = JSON.parse(new TextDecoder().decode(bytes))
+  assert.equal(payload.body.kind, 'text')
+  assert.equal(payload.body.content, 'hello')
+  for (const forbidden of ['sender', 'file_name', 'reply_preview']) {
+    assert.ok(!(forbidden in payload.body), `${forbidden} must be stripped`)
+  }
+})
+
+test('encode accepts the older `timestamp` field as a fallback for sent_at', () => {
+  const bytes = encodeApplicationPayload({
+    client_id: clientId(),
+    timestamp: ISO,
+    kind: 'text',
+    content: 'hi',
+  })
+  const payload = JSON.parse(new TextDecoder().decode(bytes))
+  assert.equal(payload.sent_at, ISO)
+  assert.ok(!('timestamp' in payload.body))
 })
