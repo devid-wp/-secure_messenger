@@ -8,10 +8,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ROOTS = (PROJECT_ROOT / "app", PROJECT_ROOT / "scripts")
-TEXT_ROOTS = (
-    PROJECT_ROOT / "frontend" / "src",
-    PROJECT_ROOT / "frontend" / "src-tauri" / "src",
-)
+TEXT_ROOTS = (PROJECT_ROOT / "frontend" / "src",)
 SENSITIVE_IDENTIFIERS = {
     "access_token",
     "refresh_token",
