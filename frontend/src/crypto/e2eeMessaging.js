@@ -4,10 +4,30 @@ import {
   removeMlsDevices, updateMlsGroup,
 } from './mlsRuntimeBridge'
 import { synchronizeDeviceMls } from './e2eeBootstrap'
-import { decodeApplicationPayload, encodeApplicationPayload } from './applicationPayload'
+import { assertAuthenticatedPayloadSender, decodeApplicationPayload, encodeApplicationPayload } from './applicationPayload'
+import { classifyMlsError, isExpectedMlsError, MLS_ERROR_CODES, MlsEnvelopeError } from './mlsErrors'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const deviceOwners = new Map()
+const localDevicesByChat = new Map()
+
+function authenticatedSender(envelope) {
+  const owner = deviceOwners.get(envelope.sender_device_id)
+  if (!owner) {
+    throw new MlsEnvelopeError(MLS_ERROR_CODES.UNKNOWN_SENDER_DEVICE, 'MLS sender device is not in the authenticated directory')
+  }
+  return owner
+}
+
+function reportMlsIssue(error, envelope) {
+  const classified = classifyMlsError(error)
+  if (typeof globalThis.dispatchEvent === 'function' && typeof globalThis.CustomEvent === 'function') {
+    globalThis.dispatchEvent(new CustomEvent('secure-messenger:mls-error', {
+      detail: { code: classified.code, envelopeId: envelope?.id ?? null, epoch: envelope?.epoch ?? null },
+    }))
+  }
+  return classified
+}
 
 function bytesToBase64(bytes) {
   let binary = ''
@@ -57,21 +77,35 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
   const directory = await api(`/chats/${chatId}/devices`, token)
   const devices = directory.devices
   for (const device of devices) deviceOwners.set(device.device_id, device.login)
+  localDevicesByChat.set(chatId, deviceId)
   if (!devices.some((device) => device.device_id === deviceId)) {
     throw new Error('This device has no published MLS identity')
   }
 
   const envelopes = await api(`/chats/${chatId}/envelopes?after=0`, token)
+  const deferred = []
   for (const envelope of envelopes) {
     if (envelope.sender_device_id === deviceId) continue
     if (envelope.content_type === 'application') continue
-    const wire = base64ToBytes(envelope.payload)
     try {
+      authenticatedSender(envelope)
+      const wire = base64ToBytes(envelope.payload)
       if (envelope.content_type === 'welcome') await joinMlsGroup(wire)
       else await processMls(chatId, wire)
-    } catch {
-      // OpenMLS rejects duplicates, stale epochs and already-consumed Welcome
-      // messages. Continue so a later, valid envelope can repair ordering.
+    } catch (error) {
+      const classified = reportMlsIssue(error, envelope)
+      if (classified.code === MLS_ERROR_CODES.MISSING_COMMIT) deferred.push(envelope)
+      else if (!isExpectedMlsError(classified)) continue
+    }
+  }
+  for (const envelope of deferred) {
+    try {
+      const wire = base64ToBytes(envelope.payload)
+      if (envelope.content_type === 'welcome') await joinMlsGroup(wire)
+      else await processMls(chatId, wire)
+    } catch (error) {
+      const classified = reportMlsIssue(error, envelope)
+      if (!isExpectedMlsError(classified)) continue
     }
   }
 
@@ -100,30 +134,33 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
 }
 
 export async function encryptAndPublish(token, chatId, message) {
-  const plaintext = encodeApplicationPayload(message)
+  const senderDeviceId = localDevicesByChat.get(chatId)
+  if (!senderDeviceId) throw new Error('MLS group must be synchronized before publishing')
+  const reply = message.reply_to_client_id ? { target_client_id: message.reply_to_client_id } : undefined
+  const plaintext = encodeApplicationPayload({ ...message, sender_device_id: senderDeviceId, reply })
   const encrypted = await encryptMls(chatId, plaintext)
   return publishEnvelope(token, chatId, 'application', encrypted.epoch, encrypted.ciphertext)
 }
 
 export async function decryptEnvelope(chatId, envelope) {
-  if (envelope.content_type !== 'application') {
-    await processMls(chatId, base64ToBytes(envelope.payload))
-    return null
-  }
-  const wire = base64ToBytes(envelope.payload)
-  const cached = await cachedMlsApplication(wire)
-  if (cached) {
-    const value = decodeApplicationPayload(Uint8Array.from(cached))
-    value.sender = deviceOwners.get(envelope.sender_device_id)
-    if (!value.sender) throw new Error('MLS sender device is not in the authenticated directory')
+  try {
+    const sender = authenticatedSender(envelope)
+    const wire = base64ToBytes(envelope.payload)
+    if (envelope.content_type !== 'application') {
+      await processMls(chatId, wire)
+      return null
+    }
+    const cached = await cachedMlsApplication(wire)
+    const plaintext = cached || (await processMls(chatId, wire)).plaintext
+    const value = decodeApplicationPayload(Uint8Array.from(plaintext))
+    try { assertAuthenticatedPayloadSender(value, envelope.sender_device_id) } catch (error) {
+      throw new MlsEnvelopeError(MLS_ERROR_CODES.PROTOCOL_VIOLATION, error.message, error)
+    }
+    value.sender = sender
     return value
+  } catch (error) {
+    throw reportMlsIssue(error, envelope)
   }
-  const processed = await processMls(chatId, wire)
-  if (processed.kind !== 'application') return null
-  const value = decodeApplicationPayload(Uint8Array.from(processed.plaintext))
-  value.sender = deviceOwners.get(envelope.sender_device_id)
-  if (!value.sender) throw new Error('MLS sender device is not in the authenticated directory')
-  return value
 }
 
 export async function removeRevokedDevice(token, chatIds, deviceId) {

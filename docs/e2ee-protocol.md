@@ -111,7 +111,7 @@ MLS доверяет Authentication Service в привязке credential к id
 - Outer envelope не повторяет sender user name или application content type.
 
 Application data uses this canonical versioned JSON object before MLS
-encryption: `{"version":1,"type":"message","client_id":"uuid","sent_at":"ISO-8601","body":{...}}`.
+encryption: `{"version":1,"type":"message","client_id":"uuid","sender_device_id":"uuid","sent_at":"ISO-8601","body":{...}}`.
 Supported types are `message`, `edit`, `delete`, `reaction`, `receipt`,
 `attachment`, `group_metadata`, and `device_event`. Unknown versions, types,
 top-level fields, malformed UUID/timestamps, mutation targets, and payloads over
@@ -121,7 +121,7 @@ top-level fields, malformed UUID/timestamps, mutation targets, and payloads over
 
 | Type | Required body fields | Optional body fields |
 |---|---|---|
-| `message` | `kind` | `text`, `content`, `sticker` |
+| `message` | `kind` | `text`, `content`, `sticker`, `reply: {target_client_id}` |
 | `edit` | `target_client_id` (UUID), `content` (non-empty string) | – |
 | `delete` | `target_client_id` (UUID) | – |
 | `reaction` | `target_client_id` (UUID), `emoji` (non-empty string) | – |
@@ -159,6 +159,7 @@ mutation that targets an unknown or foreign client_id.
 - `version` other than `1`;
 - `type` not in the supported allowlist;
 - `client_id` that is not a RFC 4122 variant-1 UUID;
+- `sender_device_id` that is not a UUID or does not match the authenticated outer envelope sender;
 - `sent_at` that is not a strict ISO-8601 timestamp;
 - body fields not in the per-type schema or fields forbidden above;
 - missing required body fields for the given type;
@@ -171,6 +172,22 @@ throws before MLS encryption if the caller did not supply a valid
 `client_id` UUID, an ISO-8601 `sent_at` (or `timestamp` fallback) and the
 required body fields for the inferred type. Local UI bookkeeping fields
 are stripped before encryption.
+
+#### Replay, ordering and MLS errors
+
+The client deduplicates application events by the encrypted `client_id`, then
+applies edit, delete, reaction and receipt events after base messages have been
+collected. This makes out-of-order mutations deterministic and prevents a
+replayed ciphertext routed under another envelope id from creating a second
+message. Edit/delete events are accepted only from the authenticated owner of
+the original message. Unknown or revoked devices are rejected before their
+wire messages are handed to the MLS runtime.
+
+MLS failures are classified as `duplicate`, `stale_epoch`, `missing_commit`,
+`corrupted_ciphertext`, `unknown_sender_device`, or `protocol_violation`.
+Duplicates and stale epochs are expected no-ops. A missing Commit is retried
+after the current control-envelope pass. Integrity and protocol failures are
+surfaced to the UI and never rendered as ordinary messages.
 
 #### External MLS envelope (server wire format)
 

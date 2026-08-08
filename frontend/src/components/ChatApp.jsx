@@ -26,6 +26,8 @@ import {
 } from '../crypto/e2eeMessaging'
 import { decryptAttachment, encryptAttachment } from '../crypto/attachmentCrypto'
 import { createSafetyCode } from '../crypto/safetyCode'
+import { applyMessageLifecycle } from '../crypto/messageLifecycle'
+import { MLS_ERROR_CODES } from '../crypto/mlsErrors'
 import QRCode from 'qrcode'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
@@ -200,6 +202,17 @@ function ChatApp({ token, login, deviceId, onLogout }) {
   const [securityEvents, setSecurityEvents] = useState([])
   const [inputText, setInputText] = useState('')
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    const handleMlsError = (event) => {
+      const code = event.detail?.code
+      if (code && ![MLS_ERROR_CODES.DUPLICATE, MLS_ERROR_CODES.STALE_EPOCH].includes(code)) {
+        setError(`Encrypted envelope rejected (${code}).`)
+      }
+    }
+    window.addEventListener('secure-messenger:mls-error', handleMlsError)
+    return () => window.removeEventListener('secure-messenger:mls-error', handleMlsError)
+  }, [])
   const [wsReady, setWsReady] = useState(false)
   const [historyRefresh, setHistoryRefresh] = useState(0)
   const [profile, setProfile] = useState({ id: null, login, username: login.toLowerCase(), display_name: '', bio: '', avatar_url: null })
@@ -252,6 +265,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
   const reconnectTimerRef = useRef(null)
   const decryptedEnvelopesRef = useRef(new Map())
   const sentSinceUpdateRef = useRef(new Map())
+  const receiptedMessagesRef = useRef(new Set())
   const profileAvatarPreviewRef = useRef(null)
   const stickerPreviewRef = useRef(null)
 
@@ -422,12 +436,14 @@ function ChatApp({ token, login, deviceId, onLogout }) {
             for (const envelope of envelopes) {
               if (envelope.content_type !== 'application') continue
               const item = await decryptEnvelope(group.id, envelope)
-              if (item?.operation === 'group_metadata' && item.name) {
+              if (item?.type === 'group_metadata' && item.name) {
                 group.name = item.name
               }
             }
-          } catch {
-            // Missing/stale epochs leave an opaque fallback title.
+          } catch (mlsError) {
+            if (![MLS_ERROR_CODES.DUPLICATE, MLS_ERROR_CODES.STALE_EPOCH].includes(mlsError.code)) {
+              setError(`Encrypted group metadata rejected (${mlsError.code || 'protocol_violation'})`)
+            }
           }
         }
         const chatData = [...groups, ...await dmResponse.json()]
@@ -510,7 +526,8 @@ function ChatApp({ token, login, deviceId, onLogout }) {
         }
         if (!response.ok) throw new Error('Could not load messages')
         const envelopes = await response.json()
-        const decrypted = []
+        const lifecycleEvents = []
+        const mlsFailures = []
         for (const envelope of envelopes) {
           if (envelope.content_type !== 'application') continue
           let item = decryptedEnvelopesRef.current.get(envelope.id)
@@ -518,24 +535,29 @@ function ChatApp({ token, login, deviceId, onLogout }) {
             try {
               item = await decryptEnvelope(activeChatId, envelope)
               if (item) decryptedEnvelopesRef.current.set(envelope.id, item)
-            } catch {
-              // Duplicate/replay and an unavailable epoch fail closed.
+            } catch (mlsError) {
+              if (![MLS_ERROR_CODES.DUPLICATE, MLS_ERROR_CODES.STALE_EPOCH].includes(mlsError.code)) {
+                mlsFailures.push(mlsError.code || MLS_ERROR_CODES.PROTOCOL_VIOLATION)
+              }
             }
           }
-          if (item?.operation === 'group_metadata') {
-            continue
-          } else if (item?.operation === 'edit') {
-            const target = decrypted.find((message) => message.client_id === item.target_client_id)
-            if (target?.sender === item.sender) Object.assign(target, { content: item.content, edited_at: envelope.created_at })
-          } else if (item?.operation === 'delete') {
-            const target = decrypted.find((message) => message.client_id === item.target_client_id)
-            if (target?.sender === item.sender) Object.assign(target, { content: '', deleted_at: envelope.created_at })
-          } else if (item) decrypted.push({
-              ...item,
-              id: `mls:${envelope.id}`,
-              timestamp: envelope.created_at,
-              mls_epoch: envelope.epoch,
-            })
+          if (item) lifecycleEvents.push({
+            item,
+            envelope: { id: `mls:${envelope.id}`, timestamp: envelope.created_at, mls_epoch: envelope.epoch },
+          })
+        }
+        const decrypted = applyMessageLifecycle(lifecycleEvents)
+        for (const message of decrypted) {
+          if (message.sender_device_id === deviceId || receiptedMessagesRef.current.has(message.client_id)) continue
+          try {
+            for (const state of ['delivered', 'read']) {
+              await encryptAndPublish(token, activeChatId, {
+                client_id: crypto.randomUUID(), sent_at: new Date().toISOString(),
+                operation: 'receipt', target_client_id: message.client_id, state,
+              })
+            }
+            receiptedMessagesRef.current.add(message.client_id)
+          } catch { mlsFailures.push('receipt_publish_failed') }
         }
         if (!cancelled) {
           const pending = outboxRef.current.filter(
@@ -546,7 +568,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
           setChats((previous) => previous.map((chat) => (
             chat.id === activeChatId ? { ...chat, unread_count: 0 } : chat
           )))
-          setError('')
+          setError(mlsFailures.length ? `Rejected ${mlsFailures.length} unverifiable encrypted envelope(s).` : '')
         }
       } catch (loadError) {
         if (!cancelled) setError(loadError.message)
@@ -613,6 +635,22 @@ function ChatApp({ token, login, deviceId, onLogout }) {
         setWsReady(true)
         setError('')
         setHistoryRefresh((value) => value + 1)
+        for (const pending of [...outboxRef.current]) {
+          void (async () => {
+            try {
+              await synchronizeMlsGroup(token, deviceId, pending.chat_id)
+              const envelope = await encryptAndPublish(token, pending.chat_id, pending)
+              decryptedEnvelopesRef.current.set(envelope.id, pending)
+              outboxRef.current = outboxRef.current.filter((item) => item.client_id !== pending.client_id)
+              updateMessageStatus(pending.client_id, 'sent', {
+                id: `mls:${envelope.id}`, timestamp: envelope.created_at, mls_epoch: envelope.epoch,
+              })
+            } catch (retryError) {
+              updateMessageStatus(pending.client_id, 'failed')
+              setError(retryError.message || 'Encrypted retry failed')
+            }
+          })()
+        }
       }
 
       ws.onclose = (closeEvent) => {
@@ -750,7 +788,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [login, onLogout, token])
+  }, [deviceId, login, onLogout, token])
 
   const selectConversation = async (conversation) => {
     setError('')
@@ -891,6 +929,18 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       )))
     } catch {
       setError('Could not delete the message')
+    }
+  }
+
+  const reactToMessage = async (message, emoji) => {
+    try {
+      await encryptAndPublish(token, message.chat_id, {
+        client_id: crypto.randomUUID(), sent_at: new Date().toISOString(),
+        operation: 'reaction', target_client_id: message.client_id, emoji,
+      })
+      setHistoryRefresh((value) => value + 1)
+    } catch (reactionError) {
+      setError(reactionError.message || 'Could not send encrypted reaction')
     }
   }
 
@@ -1785,13 +1835,16 @@ function ChatApp({ token, login, deviceId, onLogout }) {
                       <span className="message__text">{message.content}</span>
                     </div>
                   )}
+                  {message.reactions?.length > 0 && <div className="message__reactions">
+                    {message.reactions.map((reaction) => <span key={`${reaction.sender_device_id}:${reaction.emoji}`} title={reaction.sender}>{reaction.emoji}</span>)}
+                  </div>}
                   <span className="message__time">
                     {messageTime(message.timestamp)}
                     {message.edited_at && !message.deleted_at && <span className="edited-label">edited</span>}
                     {own && <MessageStatus status={message.status} />}
                   </span>
                   {!message.deleted_at && message.client_id && (
-                    <MessageActions message={message} own={own} onReply={setReplyingTo} onEdit={editMessage} onDelete={deleteMessage} />
+                    <MessageActions message={message} own={own} onReply={setReplyingTo} onEdit={editMessage} onDelete={deleteMessage} onReact={reactToMessage} />
                   )}
                 </div>
               </div>

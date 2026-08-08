@@ -24,7 +24,7 @@ const TYPES = Object.freeze([
   'attachment', 'group_metadata', 'device_event',
 ])
 const TYPE_SET = new Set(TYPES)
-const TOP_LEVEL_FIELDS = Object.freeze(['version', 'type', 'client_id', 'sent_at', 'body'])
+const TOP_LEVEL_FIELDS = Object.freeze(['version', 'type', 'client_id', 'sender_device_id', 'sent_at', 'body'])
 const TOP_LEVEL_FIELDS_SET = new Set(TOP_LEVEL_FIELDS)
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const ISO_8601_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
@@ -53,8 +53,8 @@ const FORBIDDEN_BODY_FIELDS = new Set([
 const BODY_SCHEMAS = Object.freeze({
   message: Object.freeze({
     required: ['kind'],
-    optional: Object.freeze(['text', 'content', 'sticker']),
-    allowed: Object.freeze(['kind', 'text', 'content', 'sticker']),
+    optional: Object.freeze(['text', 'content', 'sticker', 'reply']),
+    allowed: Object.freeze(['kind', 'text', 'content', 'sticker', 'reply']),
   }),
   edit: Object.freeze({
     required: ['target_client_id', 'content'],
@@ -102,7 +102,10 @@ function inferType(body) {
   if (!isPlainObject(body)) return null
   if (body.operation === 'edit') return 'edit'
   if (body.operation === 'delete') return 'delete'
+  if (body.operation === 'reaction') return 'reaction'
+  if (body.operation === 'receipt') return 'receipt'
   if (body.operation === 'group_metadata') return 'group_metadata'
+  if (body.operation === 'device_event') return 'device_event'
   if (body.attachment_descriptor) return 'attachment'
   return 'message'
 }
@@ -158,6 +161,12 @@ function validateBody(type, body) {
     throw new Error('Receipt body.state must be "delivered" or "read"')
   }
   if (type === 'attachment') validateAttachmentDescriptor(body.attachment_descriptor)
+  if (type === 'message' && body.reply !== undefined) {
+    if (!isPlainObject(body.reply) || !isUuid(body.reply.target_client_id)
+      || Object.keys(body.reply).some((field) => field !== 'target_client_id')) {
+      throw new Error('Message reply must contain only a UUID target_client_id')
+    }
+  }
 }
 
 export function encodeApplicationPayload(body) {
@@ -167,6 +176,9 @@ export function encodeApplicationPayload(body) {
   if (!isUuid(body.client_id)) {
     throw new Error('MLS payload requires a UUID client_id')
   }
+  if (!isUuid(body.sender_device_id)) {
+    throw new Error('MLS payload requires a UUID sender_device_id')
+  }
   const sentAt = body.sent_at ?? body.timestamp
   if (!isStrictIso(sentAt)) {
     throw new Error('MLS payload requires an ISO-8601 sent_at')
@@ -175,6 +187,7 @@ export function encodeApplicationPayload(body) {
     version: VERSION,
     type,
     client_id: body.client_id,
+    sender_device_id: body.sender_device_id,
     sent_at: sentAt,
     body: { ...body },
   }
@@ -185,6 +198,7 @@ export function encodeApplicationPayload(body) {
   for (const forbidden of FORBIDDEN_BODY_FIELDS) delete value.body[forbidden]
   delete value.body.operation
   delete value.body.client_id
+  delete value.body.sender_device_id
   delete value.body.sent_at
   delete value.body.timestamp
   return encoder.encode(JSON.stringify(validateApplicationPayload(value)))
@@ -216,8 +230,16 @@ export function decodeApplicationPayload(bytes) {
     ...payload.body,
     type: payload.type,
     client_id: payload.client_id,
+    sender_device_id: payload.sender_device_id,
     sent_at: payload.sent_at,
   }
+}
+
+export function assertAuthenticatedPayloadSender(payload, envelopeSenderDeviceId) {
+  if (!isUuid(envelopeSenderDeviceId) || payload?.sender_device_id !== envelopeSenderDeviceId) {
+    throw new Error('Authenticated MLS sender does not match routed device')
+  }
+  return payload
 }
 
 export function validateApplicationPayload(value) {
@@ -235,6 +257,9 @@ export function validateApplicationPayload(value) {
   }
   if (!isUuid(value.client_id)) {
     throw new Error('MLS payload client_id must be a UUID')
+  }
+  if (!isUuid(value.sender_device_id)) {
+    throw new Error('MLS payload sender_device_id must be a UUID')
   }
   if (!isStrictIso(value.sent_at)) {
     throw new Error('MLS payload sent_at must be ISO-8601')

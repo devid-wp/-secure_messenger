@@ -4,12 +4,14 @@ import {
   APPLICATION_PAYLOAD_TYPES,
   APPLICATION_PAYLOAD_VERSION,
   MAX_APPLICATION_PAYLOAD_BYTES,
+  assertAuthenticatedPayloadSender,
   decodeApplicationPayload,
   encodeApplicationPayload,
   validateApplicationPayload,
 } from '../src/crypto/applicationPayload.js'
 
 const ISO = '2026-08-07T12:34:56.000Z'
+const DEVICE_ID = '11111111-1111-4111-8111-111111111111'
 
 function clientId() {
   return crypto.randomUUID()
@@ -20,6 +22,7 @@ function baseMessage(overrides = {}) {
     version: APPLICATION_PAYLOAD_VERSION,
     type: 'message',
     client_id: clientId(),
+    sender_device_id: DEVICE_ID,
     sent_at: ISO,
     body: { kind: 'text', content: 'hello' },
     ...overrides,
@@ -39,6 +42,7 @@ test('encode then decode round-trips a text message', () => {
   const id = clientId()
   const decoded = decodeApplicationPayload(encodeApplicationPayload({
     client_id: id,
+    sender_device_id: DEVICE_ID,
     sent_at: ISO,
     kind: 'text',
     content: 'secret',
@@ -54,6 +58,7 @@ test('encode strips local UI fields and survives the forbidden-field check', () 
   const id = clientId()
   const bytes = encodeApplicationPayload({
     client_id: id,
+    sender_device_id: DEVICE_ID,
     sent_at: ISO,
     kind: 'text',
     content: 'hello',
@@ -216,6 +221,7 @@ test('encode rejects missing client_id and missing sent_at', () => {
   assert.throws(() => encodeApplicationPayload({ kind: 'text', content: 'hi' }), /client_id/)
   assert.throws(() => encodeApplicationPayload({
     client_id: clientId(),
+    sender_device_id: DEVICE_ID,
     kind: 'text',
     content: 'hi',
   }), /sent_at/)
@@ -224,6 +230,7 @@ test('encode rejects missing client_id and missing sent_at', () => {
 test('encode strips forbidden fields instead of failing', () => {
   const bytes = encodeApplicationPayload({
     client_id: clientId(),
+    sender_device_id: DEVICE_ID,
     sent_at: ISO,
     kind: 'text',
     content: 'hello',
@@ -242,6 +249,7 @@ test('encode strips forbidden fields instead of failing', () => {
 test('encode accepts the older `timestamp` field as a fallback for sent_at', () => {
   const bytes = encodeApplicationPayload({
     client_id: clientId(),
+    sender_device_id: DEVICE_ID,
     timestamp: ISO,
     kind: 'text',
     content: 'hi',
@@ -249,4 +257,19 @@ test('encode accepts the older `timestamp` field as a fallback for sent_at', () 
   const payload = JSON.parse(new TextDecoder().decode(bytes))
   assert.equal(payload.sent_at, ISO)
   assert.ok(!('timestamp' in payload.body))
+})
+
+test('reply target and sender device are authenticated inside MLS payload', () => {
+  const target = clientId()
+  const payload = JSON.parse(new TextDecoder().decode(encodeApplicationPayload({
+    client_id: clientId(), sender_device_id: DEVICE_ID, sent_at: ISO,
+    kind: 'text', content: 'reply', reply: { target_client_id: target },
+  })))
+  assert.equal(payload.sender_device_id, DEVICE_ID)
+  assert.doesNotThrow(() => assertAuthenticatedPayloadSender(payload, DEVICE_ID))
+  assert.throws(() => assertAuthenticatedPayloadSender(payload, crypto.randomUUID()), /does not match/)
+  assert.deepEqual(payload.body.reply, { target_client_id: target })
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(), body: { kind: 'text', content: 'x', reply: { target_client_id: target, preview: 'leak' } },
+  }), /reply/)
 })
