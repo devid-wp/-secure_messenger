@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import { test } from 'vitest'
 import { createSafetyCode } from '../src/crypto/safetyCode.js'
 
 test('safety code is stable regardless of participant order', async () => {

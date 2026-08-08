@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import { test } from 'vitest'
 import { decryptAttachment, encryptAttachment, MAX_ATTACHMENT_BYTES } from '../src/crypto/attachmentCrypto.js'
 
 function makeFile(name, bytes, type) {

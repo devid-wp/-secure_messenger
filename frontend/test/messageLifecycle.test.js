@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import { test } from 'vitest'
 import { applyMessageLifecycle } from '../src/crypto/messageLifecycle.js'
 import { classifyMlsError, MLS_ERROR_CODES } from '../src/crypto/mlsErrors.js'
 

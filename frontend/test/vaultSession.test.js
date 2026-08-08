@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import { test } from 'vitest'
 import { publishVaultEvent, subscribeVaultEvents, VAULT_CHANNEL } from '../src/crypto/vaultSession.js'
 
 test('vault lock and logout events are shared without secrets', () => {
