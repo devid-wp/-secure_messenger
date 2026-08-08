@@ -63,6 +63,14 @@ test('decrypt rejects a forged plaintext_size', async () => {
   await assert.rejects(decryptAttachment(ciphertext, tampered))
 })
 
+test('files larger than the former chunk boundary use one GCM authentication tag', async () => {
+  const source = new Uint8Array((1024 * 1024) + 17).fill(0x5a)
+  const file = makeFile('large.bin', source, 'application/octet-stream')
+  const { ciphertext, descriptor } = await encryptAttachment(file)
+  assert.equal(ciphertext.byteLength, source.byteLength + 16)
+  assert.deepEqual(await decryptAttachment(ciphertext, descriptor), source)
+})
+
 test('decrypt rejects a ciphertext shorter than the GCM tag', async () => {
   const source = new TextEncoder().encode('tiny')
   const file = makeFile('tiny.txt', source, 'text/plain')

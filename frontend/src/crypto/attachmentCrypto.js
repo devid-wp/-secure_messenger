@@ -3,8 +3,8 @@
 // Each file is encrypted locally before it ever leaves the browser:
 //   * a fresh 256-bit AES-GCM key is generated per file
 //   * a fresh 96-bit nonce is generated per file
-//   * the file is streamed through AES-256-GCM in fixed-size chunks so we
-//     never hold the whole plaintext in memory at once
+//   * one AES-256-GCM operation authenticates the complete file; WebCrypto
+//     has no safe incremental AES-GCM API
 //   * the ciphertext is uploaded as `application/octet-stream` and the
 //     file key, nonce, original name, MIME type, plaintext size and the
 //     SHA-256 of the plaintext are written into the MLS application
@@ -23,9 +23,6 @@ const ALGORITHM = 'AES-256-GCM'
 const GCM_NONCE_BYTES = 12
 const GCM_TAG_BYTES = 16
 const KEY_BYTES = 32
-// 1 MiB chunks keep memory bounded for large files while still letting
-// WebCrypto finish each chunk without spilling to disk.
-const CHUNK_BYTES = 1024 * 1024
 // Hard ceiling enforced before we allocate a buffer for the plaintext.
 // Mirrors the backend `MAX_ATTACHMENT_BYTES = 50 MiB` minus the per-file
 // GCM tag overhead, leaving a small safety margin for the descriptor and
@@ -83,31 +80,6 @@ function assertSize(file, limit) {
   if (size > limit) throw new Error('Attachment exceeds size limit')
 }
 
-// Streams a Blob/File through `transform(chunk)` and concatenates the
-// transformed chunks into a single Uint8Array without ever holding the
-// full plaintext in memory at once. `transform` must return a Uint8Array.
-async function mapChunks(file, transform) {
-  const collectedLength = { value: 0 }
-  const collected = []
-  let position = 0
-  while (position < file.size) {
-    const slice = file.slice(position, Math.min(position + CHUNK_BYTES, file.size))
-    position += CHUNK_BYTES
-    const buffer = new Uint8Array(await slice.arrayBuffer())
-    const transformed = await transform(buffer, position)
-    zeroize(buffer)
-    collected.push(transformed)
-    collectedLength.value += transformed.byteLength
-  }
-  const merged = new Uint8Array(collectedLength.value)
-  let offset = 0
-  for (const chunk of collected) {
-    merged.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return merged
-}
-
 export async function encryptAttachment(file, options = {}) {
   assertSize(file, MAX_ATTACHMENT_BYTES)
   const limit = options.maxBytes ?? MAX_ATTACHMENT_BYTES
@@ -117,14 +89,14 @@ export async function encryptAttachment(file, options = {}) {
   const nonce = crypto.getRandomValues(new Uint8Array(GCM_NONCE_BYTES))
   const cryptoKey = await crypto.subtle.importKey('raw', rawKey, 'AES-GCM', false, ['encrypt'])
 
-  // Run every plaintext chunk through GCM with the same nonce/key.
+  // WebCrypto does not expose incremental AES-GCM. Reusing this nonce for
   // AES-GCM is only safe with a fixed nonce when the key is per-file and
   // never reused across files — both conditions hold here because
-  // rawKey and nonce are fresh.
-  const ciphertext = await mapChunks(file, async (chunk) => {
-    const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, cryptoKey, chunk))
-    return encrypted
-  })
+  // chunks would repeat the GCM keystream, so the size limit bounds one
+  // authenticated operation instead.
+  const plaintext = new Uint8Array(await file.arrayBuffer())
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, cryptoKey, plaintext))
+  zeroize(plaintext)
 
   const descriptor = {
     version: VERSION,
