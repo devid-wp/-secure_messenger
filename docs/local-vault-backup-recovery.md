@@ -61,7 +61,7 @@ Cryptographic wiring:
 | MLS state encrypted with DEK (AES-256-GCM) | `crypto.subtle.encrypt` with the DEK, AAD binds device + purpose |
 | Passphrase runs through a KDF | PBKDF2-HMAC-SHA-256, 600 000 iterations |
 | Derived key used only to wrap the DEK | The KEK is the only key that ever touches `wrapped_dek` |
-| Passphrase and derived key not persisted | `importKey` with `extractable=false`, no IndexedDB writes |
+| Passphrase and derived key not persisted | `importKey` with `extractable=false` for the KEK, no IndexedDB writes |
 | Unique salt per installation | 16-byte salt, regenerated for every `wrapNewDek` call |
 | Unique KDF parameters per installation | Iteration count stored per record; future cost changes ride along |
 | Unique nonce per AES-GCM encryption | 12-byte `wrap_iv` and 12-byte `state_iv`, regenerated per call |
@@ -69,18 +69,84 @@ Cryptographic wiring:
 
 ## v1 → v2 migration
 
-v1 stored the AES-GCM key in the `keys` object store of the same database.
-The migration flow is:
+v1 stored a non-extractable AES-GCM `CryptoKey` in the `keys` object
+store of the same database and used it to encrypt a single MLS state
+record per device. v2 retires that key. Migration is **explicit**:
+v1 is never deleted automatically, the user must opt in by setting a
+new passphrase, and v1 is removed only after the v2 record is written,
+read back, decrypted, and byte-compared against the v1 plaintext.
 
-1. Decrypt the v1 ciphertext under the v1 IndexedDB key and read the
-   plaintext MLS state.
-2. Prompt for a passphrase, run `wrapNewDek`, then re-encrypt the state
-   under the new DEK.
-3. Write the v2 record over the v1 one and delete the legacy `keys`
-   entry atomically.
+The strict order is enforced by `vaultCrypto.migrateV1ToV2` and the
+worker's `migrateVault` handler:
 
-If the v2 write fails for any reason, the worker restores the v1 record
-and zeroes the temporary plaintext buffer.
+1. **Read v1 record.** `readStore('state', deviceId)` returns the v1
+   `{ version: 1, iv, ciphertext }` record. The caller captures it
+   in case the v2 write needs to be rolled back.
+2. **Decrypt v1.** `loadLegacyState(deviceId)` validates the v1 record
+   shape (`version === 1`, `iv instanceof Uint8Array`,
+   `ciphertext instanceof ArrayBuffer`) and decrypts it with the
+   IndexedDB-backed AES-GCM key using AAD
+   `secure-messenger:<device_id>:v1`. Any tampered byte or wrong AAD
+   fails the AES-GCM auth-tag check.
+3. **Prompt for passphrase.** The UI collects the new passphrase
+   (≥ 10 characters) and submits it to `migrateVault`.
+4. **Wrap a fresh DEK.** `wrapNewDek(deviceId, passphrase)` generates
+   a new 256-bit DEK, derives the KEK from the passphrase via
+   PBKDF2-HMAC-SHA-256, and wraps the DEK under a fresh salt and IV.
+5. **Encrypt state under the new DEK.** `encryptStateWithDek` produces
+   a fresh 12-byte IV and AES-256-GCM ciphertext under the DEK.
+6. **Write a v2 candidate.** The v2 record is written under a separate
+   temporary IndexedDB key. The original v1 record and CryptoKey remain
+   untouched and usable throughout verification.
+7. **Re-read the v2 record from storage.** The orchestrator reads the
+   candidate back through the same `readCandidate` callback to catch
+   any subtle corruption between the in-memory write and the persisted
+   form (truncation, encoding bug, byte-rotation).
+8. **Validate shape and decrypt.** The re-read record must pass
+   `validV2Record`. A fresh KEK is derived and the DEK is unwrapped;
+   the `state_ciphertext` is then decrypted.
+9. **Byte-compare.** The decrypted v2 plaintext is byte-compared
+   against the v1 plaintext captured in step 2. A mismatch means the
+   v2 record is corrupt — the user keeps v1 and we throw.
+10. **Only then commit.** One read-write transaction across `state` and
+    `keys` promotes the verified candidate, deletes the temporary key,
+    and removes the v1 AES-GCM key. If it aborts, IndexedDB rolls the
+    entire transaction back and v1 remains usable.
+
+If any step from 7 onwards throws, the worker deletes only the temporary
+candidate. Since neither original v1 value was modified, the user can
+retry the migration without a compensating rollback write.
+
+The temporary v1 plaintext is zeroed in a `finally` block. The v1
+record capture is held only for the duration of the migration call;
+it is not persisted to logs, IndexedDB, or any other store.
+
+### What the migration protects against
+
+| Threat | How the migration handles it |
+| --- | --- |
+| Wrong passphrase | `unwrapDek` on the candidate v2 record fails the AES-GCM unwrap. The candidate is discarded; v1 was never touched. |
+| Tampered v2 ciphertext or AAD | The post-write re-read + decrypt fails. The candidate is discarded; v1 remains usable. |
+| Tampered v1 ciphertext or AAD | `loadLegacyState` fails the AES-GCM auth-tag check before the v2 write even starts. v1 is unchanged. |
+| IndexedDB write failure | The orchestrator catches the failure before step 10; v1 remains unchanged. |
+| v2 plaintext does not match v1 plaintext | Step 9 throws; the candidate is discarded and v1 remains unchanged. |
+| Passphrase leaked through logs or storage | The orchestrator never logs or persists the passphrase. The vault record holds only the wrapped DEK; the KEK is re-derived per call and zeroed after. |
+
+### What the vault does NOT protect against
+
+The v2 vault protects MLS state at rest and in transit between
+authenticated devices, but it does **not** save data from an
+attacker who has already compromised the running browser session
+(XSS, malicious extension, attacker-controlled React component).
+Once the vault is unlocked, plaintext state lives inside the Web
+Worker; any code path that can read postMessage output or read the
+DEK handle via an injected JS bridge can exfiltrate messages.
+
+The recovery policy relies on this distinction: a forgotten
+passphrase destroys local state, but a stolen device with an
+unlocked vault exposes messages by design. Users are expected to
+lock the vault (or close the browser tab) when leaving the device
+unattended.
 
 ## Vault operations
 
@@ -92,6 +158,7 @@ The bridge exposes the six operations required by ADR-0002:
 | `unlockVault(deviceId, passphrase)` | Re-derives the KEK, unwraps the DEK, returns it to the Worker. |
 | `lockMlsRuntime()` | Rejects all pending Worker requests, calls the worker's `lock` handler, then `worker.terminate()` so the WASM linear memory is released. |
 | `changePassphrase(deviceId, oldPassphrase, newPassphrase)` | Re-wraps the same DEK under a fresh salt and IV without re-encrypting `state_ciphertext`. |
+| `migrateVault(deviceId, passphrase)` | Decrypts the v1 record under the v1 IndexedDB key, writes a v2 record over it, verifies the v2 round-trip against the v1 plaintext, and only then deletes the v1 key. Rolls back the v1 record on any failure. |
 | `hasVault(deviceId)` | Convenience boolean wrapper around `getVaultStatus`. |
 | `getVaultStatus(deviceId)` | Returns `{ exists, version, locked, migrationRequired }`. |
 
@@ -142,6 +209,7 @@ unmounts.
 | Passphrase forgotten | No recovery in v2 — the vault cannot be unlocked, MLS state is destroyed | Permanently unavailable |
 | Browser profile wiped but passphrase known | Create a new device identity and rejoin groups | Permanently unavailable; design choice for v1.0 |
 | Local MLS state corrupt | Move the damaged vault aside through an explicit reset flow | Available up to the last good snapshot, subject to MLS epoch validity |
+| v1 → v2 migration interrupted before completion | `migrateVault` is safe to retry; v1 record and v1 key are restored on any failure | Unchanged |
 | All devices and keys lost | Create a new device identity after account recovery | Permanently unavailable in v1 |
 
 Account recovery and cryptographic recovery are separate. Password reset

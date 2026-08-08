@@ -1,5 +1,14 @@
 import initWasm, { WasmMlsClient } from './wasm-generated/mls.js'
-import { PBKDF2_ITERATIONS, randomBytes, rewrapDekRaw, unwrapDek, vaultAad, wrapNewDek } from './vaultCrypto.js'
+import {
+  buildV2Record,
+  encryptStateWithDek,
+  migrateV1ToV2,
+  randomBytes,
+  rewrapDekRaw,
+  unwrapDek,
+  vaultAad,
+  wrapNewDek,
+} from './vaultCrypto.js'
 
 const DB_NAME = 'secure-messenger-mls-v1'
 const DB_VERSION = 1
@@ -53,12 +62,18 @@ async function deleteStore(store, key) {
   })
 }
 
-async function vaultKey() {
-  let key = await readStore('keys', 'device-state')
-  if (key) return key
-  key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
-  await writeStore('keys', 'device-state', key)
-  return key
+async function commitV2Migration(deviceId, candidateKey, record) {
+  const database = await openDatabase()
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(['state', 'keys'], 'readwrite')
+    const state = transaction.objectStore('state')
+    state.put(record, deviceId)
+    state.delete(candidateKey)
+    transaction.objectStore('keys').delete('device-state')
+    transaction.oncomplete = () => { database.close(); resolve(undefined) }
+    transaction.onerror = () => { database.close(); reject(transaction.error || new Error('Vault migration commit failed')) }
+    transaction.onabort = () => { database.close(); reject(transaction.error || new Error('Vault migration commit aborted')) }
+  })
 }
 
 async function loadLegacyState(deviceId) {
@@ -69,24 +84,23 @@ async function loadLegacyState(deviceId) {
   }
   const plaintext = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: record.iv, additionalData: encoder.encode(`secure-messenger:${deviceId}:v1`) },
-    await vaultKey(), record.ciphertext
+    await requireLegacyVaultKey(), record.ciphertext
   )
   return new Uint8Array(plaintext)
 }
 
+async function requireLegacyVaultKey() {
+  const key = await readStore('keys', 'device-state')
+  if (!key) throw new Error('Legacy browser vault key is missing')
+  return key
+}
+
 async function createV2Record(deviceId, passphrase, state = new Uint8Array()) {
-  const { dek, salt, wrapIv, wrappedDek } = await wrapNewDek(deviceId, passphrase)
-  const stateIv = randomBytes(12)
-  const stateCiphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: stateIv, additionalData: vaultAad(deviceId, 'state') }, dek, state)
-  const record = {
-    version: 2, device_id: deviceId,
-    kdf: { name: 'PBKDF2-HMAC-SHA-256', salt, parameters: { iterations: PBKDF2_ITERATIONS } },
-    wrapped_dek: wrappedDek, wrap_iv: wrapIv,
-    state_ciphertext: stateCiphertext, state_iv: stateIv,
-    updated_at: new Date().toISOString(),
-  }
+  const wrapped = await wrapNewDek(deviceId, passphrase)
+  const { iv: stateIv, ciphertext: stateCiphertext } = await encryptStateWithDek(deviceId, wrapped.dek, state)
+  const record = buildV2Record({ deviceId, wrap: wrapped, stateIv, stateCiphertext })
   await writeStore('state', deviceId, record)
-  activeDek = dek
+  activeDek = wrapped.dek
   return record
 }
 
@@ -194,22 +208,34 @@ const handlers = {
     return true
   },
   async migrateVault({ deviceId, passphrase }) {
-    const record = await readStore('state', deviceId)
-    if (record?.version !== 1) throw new Error('No legacy browser vault found')
-    const state = await loadLegacyState(deviceId)
-    activeDeviceId = deviceId
+    if (typeof passphrase !== 'string') throw new Error('Passphrase is required')
+    if (passphrase.length < 10) throw new Error('Vault passphrase must contain at least 10 characters')
+    const v1Record = await readStore('state', deviceId)
+    if (v1Record?.version !== 1) throw new Error('No legacy browser vault found')
+    let v1Plaintext
     try {
-      await createV2Record(deviceId, passphrase, state)
-      await unlockV2(deviceId, passphrase)
-      await deleteStore('keys', 'device-state')
+      v1Plaintext = await loadLegacyState(deviceId)
+    } catch {
+      throw new Error('Legacy browser vault is unreadable')
+    }
+    activeDeviceId = deviceId
+    const candidateKey = `migration-v2:${deviceId}`
+    try {
+      const migrated = await migrateV1ToV2({
+        deviceId, passphrase, v1Plaintext,
+        writeCandidate: (record) => writeStore('state', candidateKey, record),
+        readCandidate: () => readStore('state', candidateKey),
+        commitCandidate: (record) => commitV2Migration(deviceId, candidateKey, record),
+      })
+      activeDek = migrated.dek
+      return true
     } catch (error) {
       activeDek = null
-      await writeStore('state', deviceId, record)
+      try { await deleteStore('state', candidateKey) } catch { /* retry cleanup on the next migration */ }
       throw error
     } finally {
-      state?.fill(0)
+      v1Plaintext?.fill(0)
     }
-    return true
   },
   async unlockVault({ deviceId, passphrase }) {
     activeDeviceId = deviceId
