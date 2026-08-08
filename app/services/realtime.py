@@ -84,6 +84,10 @@ class ConnectionManager:
         for token, websocket in recipients:
             try:
                 await websocket.close(code=4003, reason="Device revoked")
+            except Exception:
+                # A revoked device may already have dropped its transport.
+                # Revocation must still complete and remove the stale socket.
+                pass
             finally:
                 await self.disconnect(token)
 
