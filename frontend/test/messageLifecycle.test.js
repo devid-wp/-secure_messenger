@@ -27,6 +27,18 @@ test('replay and duplicate client ids never create a second message', () => {
   assert.equal(applyMessageLifecycle([event(message, 1), event({ ...message }, 2)]).length, 1)
 })
 
+test('received attachments derive only their opaque download URL', () => {
+  const objectId = id()
+  const [message] = applyMessageLifecycle([event({
+    type: 'attachment',
+    client_id: id(),
+    sender_device_id: DEVICE_A,
+    attachment_descriptor: { object_id: objectId },
+  })])
+  assert.equal(message.kind, 'file')
+  assert.deepEqual(message.attachment, { content_url: `/api/v1/media/${objectId}/content` })
+})
+
 test('reply, reaction and receipts are resolved after out-of-order delivery', () => {
   const target = id()
   const replyId = id()

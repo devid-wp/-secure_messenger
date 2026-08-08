@@ -37,7 +37,8 @@ const FORBIDDEN_BODY_FIELDS = new Set([
   // Identity / addressing
   'sender', 'sender_login', 'sender_device_id', 'username', 'display_name',
   // Replies and threads
-  'reply_to', 'reply_preview', 'thread_id', 'parent_client_id',
+  'reply_to', 'reply_preview', 'reply_to_server_seq', 'reply_to_client_id',
+  'reply_to_sender', 'reply_to_content', 'thread_id', 'parent_client_id',
   // Attachments
   'attachment', 'file_name', 'mime_type', 'media_type', 'media_url', 'object_url',
   // Group metadata
@@ -189,18 +190,15 @@ export function encodeApplicationPayload(body) {
     client_id: body.client_id,
     sender_device_id: body.sender_device_id,
     sent_at: sentAt,
-    body: { ...body },
+    body: Object.fromEntries(
+      BODY_SCHEMAS[type].allowed
+        .filter((field) => Object.prototype.hasOwnProperty.call(body, field))
+        .map((field) => [field, body[field]]),
+    ),
   }
-  // Strip fields the UI included for local convenience but that must never
-  // travel inside the encrypted MLS payload. The canonical top-level fields
-  // (`client_id`, `sent_at`) and the type-inference marker (`operation`) are
-  // removed from body as well; they live at the top level only.
-  for (const forbidden of FORBIDDEN_BODY_FIELDS) delete value.body[forbidden]
-  delete value.body.operation
-  delete value.body.client_id
-  delete value.body.sender_device_id
-  delete value.body.sent_at
-  delete value.body.timestamp
+  // Outbound payloads are built from the per-type allowlist. Local UI state,
+  // type-inference markers and future fields therefore cannot cross the MLS
+  // boundary by accident. Inbound payloads remain strict and reject extras.
   return encoder.encode(JSON.stringify(validateApplicationPayload(value)))
 }
 

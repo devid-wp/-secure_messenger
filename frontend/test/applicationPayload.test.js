@@ -70,6 +70,10 @@ test('encode strips local UI fields and survives the forbidden-field check', () 
     server_seq: 12,
     status: 'sending',
     mls_epoch: 0,
+    reply_to_server_seq: null,
+    reply_to_client_id: null,
+    reply_to_sender: null,
+    reply_to_content: null,
     reply_preview: 'preview',
     file_name: 'evil.txt',
     mime_type: 'text/plain',
@@ -83,6 +87,7 @@ test('encode strips local UI fields and survives the forbidden-field check', () 
   for (const forbidden of [
     'sender', 'sender_login', 'timestamp', 'id', 'chat_id',
     'server_seq', 'status', 'mls_epoch', 'reply_preview',
+    'reply_to_server_seq', 'reply_to_client_id', 'reply_to_sender', 'reply_to_content',
     'file_name', 'mime_type', 'group_name',
   ]) {
     assert.ok(!(forbidden in payload.body), `${forbidden} must be stripped`)
@@ -203,6 +208,31 @@ test('attachment descriptor must not carry filename or MIME type', () => {
     type: 'attachment',
     body: { attachment_descriptor: { ...descriptor, object_id: 'not-uuid' } },
   }), /object_id/)
+})
+
+test('encode strips optimistic UI fields from an attachment', () => {
+  const descriptor = {
+    version: 1,
+    algorithm: 'AES-256-GCM',
+    object_id: clientId(),
+    key: 'base64',
+    nonce: 'base64',
+  }
+  const payload = JSON.parse(new TextDecoder().decode(encodeApplicationPayload({
+    id: 'pending:attachment',
+    chat_id: 7,
+    sender: 'alice',
+    content: '',
+    kind: 'file',
+    attachment: { content_url: '/opaque/ciphertext' },
+    attachment_descriptor: descriptor,
+    client_id: clientId(),
+    sender_device_id: DEVICE_ID,
+    timestamp: ISO,
+    status: 'sending',
+  })))
+  assert.equal(payload.type, 'attachment')
+  assert.deepEqual(payload.body, { attachment_descriptor: descriptor })
 })
 
 test('decode rejects non-UTF-8 and non-JSON corruption', () => {

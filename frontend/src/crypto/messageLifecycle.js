@@ -11,6 +11,10 @@ export function applyMessageLifecycle(events) {
     if (item.type === 'message' || item.type === 'attachment' || item.type === 'device_event') {
       const message = { ...item, ...event.envelope }
       if (item.type === 'device_event') Object.assign(message, { kind: 'system', content: item.event })
+      if (item.type === 'attachment') Object.assign(message, {
+        kind: 'file',
+        attachment: { content_url: `/api/v1/media/${item.attachment_descriptor.object_id}/content` },
+      })
       messages.push(message)
       byClientId.set(item.client_id, message)
     } else if (item.type !== 'group_metadata') pending.push(event)
