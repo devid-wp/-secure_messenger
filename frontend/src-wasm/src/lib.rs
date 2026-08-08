@@ -4,6 +4,7 @@ use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
 use wasm_bindgen::prelude::*;
 
@@ -68,6 +69,52 @@ fn group_id(chat_id: &str) -> GroupId {
     GroupId::from_slice(format!("secure-messenger/chat/{chat_id}").as_bytes())
 }
 
+const PROVIDER_STATE_MAGIC: &[u8; 5] = b"SMMS1";
+
+fn serialize_provider(values: &HashMap<Vec<u8>, Vec<u8>>) -> Vec<u8> {
+    let mut output = Vec::new();
+    output.extend_from_slice(PROVIDER_STATE_MAGIC);
+    output.extend_from_slice(&(values.len() as u64).to_be_bytes());
+    for (key, value) in values {
+        output.extend_from_slice(&(key.len() as u64).to_be_bytes());
+        output.extend_from_slice(&(value.len() as u64).to_be_bytes());
+        output.extend_from_slice(key);
+        output.extend_from_slice(value);
+    }
+    output
+}
+
+fn deserialize_provider(input: &[u8]) -> Result<HashMap<Vec<u8>, Vec<u8>>, ()> {
+    if !input.starts_with(PROVIDER_STATE_MAGIC) {
+        return serde_json::from_slice(input).map_err(|_| ());
+    }
+    let mut cursor = PROVIDER_STATE_MAGIC.len();
+    let read_u64 = |cursor: &mut usize| -> Result<u64, ()> {
+        let end = cursor.checked_add(8).ok_or(())?;
+        let bytes: [u8; 8] = input
+            .get(*cursor..end)
+            .ok_or(())?
+            .try_into()
+            .map_err(|_| ())?;
+        *cursor = end;
+        Ok(u64::from_be_bytes(bytes))
+    };
+    let count = usize::try_from(read_u64(&mut cursor)?).map_err(|_| ())?;
+    let mut values = HashMap::with_capacity(count);
+    for _ in 0..count {
+        let key_len = usize::try_from(read_u64(&mut cursor)?).map_err(|_| ())?;
+        let value_len = usize::try_from(read_u64(&mut cursor)?).map_err(|_| ())?;
+        let key_end = cursor.checked_add(key_len).ok_or(())?;
+        let key = input.get(cursor..key_end).ok_or(())?.to_vec();
+        cursor = key_end;
+        let value_end = cursor.checked_add(value_len).ok_or(())?;
+        let value = input.get(cursor..value_end).ok_or(())?.to_vec();
+        cursor = value_end;
+        values.insert(key, value);
+    }
+    (cursor == input.len()).then_some(values).ok_or(())
+}
+
 #[wasm_bindgen]
 pub struct WasmMlsClient {
     provider: OpenMlsRustCrypto,
@@ -91,13 +138,13 @@ impl WasmMlsClient {
             let signer =
                 serde_json::from_slice(&state.signer).map_err(|_| error("invalid MLS signer"))?;
             let provider = OpenMlsRustCrypto::default();
+            let provider_values = deserialize_provider(&state.provider)
+                .map_err(|_| error("invalid MLS provider state"))?;
             *provider
                 .storage()
                 .values
                 .write()
-                .map_err(|_| error("MLS storage lock failed"))? =
-                serde_json::from_slice(&state.provider)
-                    .map_err(|_| error("invalid MLS provider state"))?;
+                .map_err(|_| error("MLS storage lock failed"))? = provider_values;
             return Ok(Self {
                 provider,
                 signer,
@@ -124,7 +171,7 @@ impl WasmMlsClient {
             version: 1,
             device_id: self.device_id.clone(),
             signer: serde_json::to_vec(&self.signer).map_err(error)?,
-            provider: serde_json::to_vec(&*values).map_err(error)?,
+            provider: serialize_provider(&values),
         })
         .map_err(error)
     }
