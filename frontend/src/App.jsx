@@ -3,6 +3,7 @@ import LoginForm from './components/LoginForm'
 import ChatApp from './components/ChatApp'
 import VaultGate from './components/VaultGate'
 import { lockMlsRuntime } from './crypto/mlsRuntimeBridge'
+import { publishVaultEvent } from './crypto/vaultSession'
 import './App.css'
 
 function App() {
@@ -71,6 +72,8 @@ function App() {
         setAccessExpiresAt(Date.now() + data.expires_in * 1000)
         setDeviceId(data.device_id)
       } catch {
+        await lockMlsRuntime()
+        publishVaultEvent('logout', deviceId)
         setToken(null)
         setLogin(null)
         setAccessExpiresAt(null)
@@ -78,7 +81,7 @@ function App() {
       }
     }, delay)
     return () => window.clearTimeout(timer)
-  }, [accessExpiresAt, token])
+  }, [accessExpiresAt, deviceId, token])
 
   const handleLogin = async (newToken, newLogin, data) => {
     setToken(newToken)
@@ -112,6 +115,7 @@ function App() {
     }
     try {
       await lockMlsRuntime()
+      publishVaultEvent('logout', deviceId)
       localStorage.removeItem('token')
       localStorage.removeItem('login')
     } finally {
@@ -120,6 +124,15 @@ function App() {
       setAccessExpiresAt(null)
       setDeviceId(null)
     }
+  }
+
+  const handleRemoteLogout = () => {
+    localStorage.removeItem('token')
+    localStorage.removeItem('login')
+    setToken(null)
+    setLogin(null)
+    setAccessExpiresAt(null)
+    setDeviceId(null)
   }
 
   if (!sessionReady) {
@@ -131,7 +144,7 @@ function App() {
       {!token ? (
         <LoginForm onLogin={handleLogin} />
       ) : (
-        <VaultGate deviceId={deviceId}>
+        <VaultGate deviceId={deviceId} onRemoteLogout={handleRemoteLogout}>
           <ChatApp token={token} login={login} deviceId={deviceId} onLogout={handleLogout} />
         </VaultGate>
       )}
