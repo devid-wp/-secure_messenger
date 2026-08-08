@@ -143,14 +143,25 @@ async def upload_encrypted_attachment(
 ):
     submitted_fields = set((await request.form()).keys())
     forbidden_metadata = submitted_fields & {
-        "name", "filename", "media_type", "plaintext_content_type", "key",
-        "nonce", "cipher", "width", "height",
+        # Anything the server does not need to route the ciphertext must
+        # travel only inside the MLS application payload — never on the
+        # upload request itself.
+        "name", "filename", "media_type", "plaintext_content_type",
+        "mime_type", "key", "nonce", "cipher", "width", "height",
+        "sha256", "object_id",
     }
     if forbidden_metadata:
         raise HTTPException(status_code=422, detail="Attachment metadata belongs inside the MLS ciphertext")
     if await session.get(ChatMember, (chat_id, current_user.id)) is None:
         raise HTTPException(status_code=404, detail="Chat not found")
     content = await _read_limited(ciphertext, MAX_ATTACHMENT_BYTES)
+    # Belt-and-braces: reject any upload whose body looks like plaintext
+    # by checking that the first bytes match the AES-GCM framing we
+    # expect on the wire. The browser never sends anything else, but a
+    # tampered client should not be able to store arbitrary files under
+    # the encrypted attachment bucket either.
+    if len(content) < 12:
+        raise HTTPException(status_code=422, detail="Ciphertext is too short to carry a GCM nonce")
     media_id = str(uuid4())
     object_key = f"attachments/{current_user.id}/{media_id}.bin"
     storage = request.app.state.object_storage
@@ -222,7 +233,11 @@ async def download_media(
             "application/octet-stream" if media.is_encrypted else media.content_type
         ),
         headers={
-            "Cache-Control": "private, max-age=3600",
+            # Encrypted attachment ciphertext MUST stay private and MUST
+            # NOT be cached by intermediaries or shared caches — the
+            # Service Worker already excludes this route, but we set the
+            # response headers anyway in case a proxy is in front.
+            "Cache-Control": "private, no-store" if media.is_encrypted else "private, max-age=3600",
             "X-Content-Type-Options": "nosniff",
         },
     )

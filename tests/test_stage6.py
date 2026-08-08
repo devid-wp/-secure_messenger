@@ -182,6 +182,13 @@ class StageSixMediaTests(unittest.TestCase):
         attachment = upload.json()
         self.assertTrue(attachment["is_encrypted"])
         self.assertNotIn("key", attachment)
+        self.assertNotIn("name", attachment)
+        self.assertNotIn("media_type", attachment)
+        # Routing metadata only — no plaintext-leaking fields.
+        self.assertEqual(
+            set(attachment.keys()),
+            {"id", "purpose", "size_bytes", "sha256", "is_encrypted", "content_url"},
+        )
 
         with self.client.websocket_connect(
             "/api/v1/realtime/ws",
@@ -201,6 +208,12 @@ class StageSixMediaTests(unittest.TestCase):
         )
         self.assertEqual(download.status_code, 200, download.text)
         self.assertEqual(download.content, ciphertext)
+        # Ciphertext is served opaque with cache disabled, so a Service
+        # Worker or shared cache can never capture the plaintext side of
+        # the file.
+        self.assertEqual(download.headers["content-type"], "application/octet-stream")
+        self.assertEqual(download.headers["cache-control"], "private, no-store")
+        self.assertEqual(download.headers["x-content-type-options"], "nosniff")
         forbidden = self.client.get(
             attachment["content_url"],
             headers=self.headers(charlie),
@@ -209,6 +222,24 @@ class StageSixMediaTests(unittest.TestCase):
         stored_files = list(self.media_dir.rglob("*.bin"))
         self.assertEqual(len(stored_files), 1)
         self.assertEqual(stored_files[0].read_bytes(), ciphertext)
+
+    def test_attachment_upload_rejects_filename_and_key_form_fields(self) -> None:
+        alice = self.register_and_login("alice")
+        self.register_and_login("bob")
+        chat = self.client.post(
+            "/api/v1/chats/dm",
+            headers=self.headers(alice),
+            json={"login": "bob"},
+        ).json()
+        ciphertext = b"\x00" * 32 + b"ciphertext-with-gcm-tag"
+        for forbidden in ("filename", "key", "nonce", "sha256", "object_id", "media_type"):
+            response = self.client.post(
+                "/api/v1/media/attachments",
+                headers=self.headers(alice),
+                files={"ciphertext": ("ciphertext.bin", ciphertext, "application/octet-stream")},
+                data={"chat_id": str(chat["id"]), forbidden: "leak"},
+            )
+            self.assertEqual(response.status_code, 422, (forbidden, response.text))
 
     def test_sticker_message_uses_typed_payload(self) -> None:
         alice = self.register_and_login("alice")

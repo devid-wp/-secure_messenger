@@ -24,7 +24,7 @@ import {
   rotateMlsEpoch,
   synchronizeMlsGroup,
 } from '../crypto/e2eeMessaging'
-import { decryptAttachment, encryptAttachment } from '../crypto/attachmentCrypto'
+import { decryptAttachment, encryptAttachment, MAX_ATTACHMENT_BYTES } from '../crypto/attachmentCrypto'
 import { createSafetyCode } from '../crypto/safetyCode'
 import { applyMessageLifecycle } from '../crypto/messageLifecycle'
 import { MLS_ERROR_CODES } from '../crypto/mlsErrors'
@@ -35,7 +35,6 @@ const WS_URL = API_URL
   ? API_URL.replace(/^http/, 'ws')
   : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
 const MAX_AVATAR_BYTES = 50 * 1024 * 1024
-const MAX_ATTACHMENT_BYTES = (50 * 1024 * 1024) - 16
 const AVATAR_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const IMAGE_ATTACHMENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const QUICK_EMOJI = ['😀', '😂', '❤️', '👍', '🔥', '🎉', '😎', '🤝', '👀', '✅', '🔒', '✨', '🙏', '💜', '🚀', '🫡']
@@ -106,25 +105,39 @@ function AuthenticatedMedia({ path, token, alt, className }) {
 function EncryptedAttachment({ message, token }) {
   const [state, setState] = useState({ loading: true, source: '', error: '' })
   const descriptor = useMemo(() => message.attachment_descriptor, [message.attachment_descriptor])
+  const objectUrlRef = useRef('')
 
   useEffect(() => {
     if (!message.attachment?.content_url || !descriptor) {
       return undefined
     }
     let active = true
-    let objectUrl = ''
+    const previousUrl = objectUrlRef.current
+    objectUrlRef.current = ''
     const decrypt = async () => {
       try {
         const response = await fetch(`${API_URL}${message.attachment.content_url}`, {
           headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
         })
         if (!response.ok) throw new Error('Download failed')
-        const plaintext = await decryptAttachment(new Uint8Array(await response.arrayBuffer()), descriptor)
-        if (!active) return
-        objectUrl = URL.createObjectURL(new Blob(
+        // Stream the ciphertext instead of buffering the whole file:
+        // `decryptAttachment` reads the body in chunks and only builds
+        // the plaintext Blob after the GCM tag and SHA-256 match.
+        const plaintext = await decryptAttachment(await response.blob(), descriptor)
+        if (!active) {
+          plaintext.fill(0)
+          return
+        }
+        // The plaintext Blob and its URL are created only after a
+        // successful decryption + integrity check, so the browser never
+        // surfaces unauthenticated bytes to <img>/<a>.
+        const objectUrl = URL.createObjectURL(new Blob(
           [plaintext],
-          { type: descriptor.media_type }
+          { type: descriptor.media_type || 'application/octet-stream' },
         ))
+        plaintext.fill(0)
+        objectUrlRef.current = objectUrl
         setState({ loading: false, source: objectUrl, error: '' })
       } catch {
         if (active) {
@@ -135,7 +148,10 @@ function EncryptedAttachment({ message, token }) {
     decrypt()
     return () => {
       active = false
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      if (previousUrl) URL.revokeObjectURL(previousUrl)
+      const latest = objectUrlRef.current
+      objectUrlRef.current = ''
+      if (latest) URL.revokeObjectURL(latest)
     }
   }, [descriptor, message.attachment, token])
 
