@@ -15,7 +15,10 @@ SENSITIVE_IDENTIFIERS = {
     "token",
     "password",
     "master_key",
+    "key",
     "private_key",
+    "payload",
+    "ciphertext",
     "secret",
 }
 PYTHON_LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical"}

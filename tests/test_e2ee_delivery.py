@@ -209,6 +209,14 @@ class E2eeDeliveryApiTests(unittest.TestCase):
         )
         self.assertEqual(len(inbox.json()), 1)
         self.assertEqual(base64.b64decode(inbox.json()[0]["payload"]), ciphertext)
+        with sqlite3.connect(self.database_path) as connection:
+            stored = connection.execute(
+                "SELECT payload, message_hash FROM mls_envelopes WHERE id = ?",
+                (first.json()["id"],),
+            ).fetchone()
+        self.assertEqual(stored[0], ciphertext)
+        self.assertNotIn(b"message", stored[0].lower())
+        self.assertEqual(len(stored[1]), 64)
 
         welcome = self.client.post(
             f"/api/v1/e2ee/chats/{chat_id}/envelopes",

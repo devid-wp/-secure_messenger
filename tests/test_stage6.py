@@ -232,7 +232,7 @@ class StageSixMediaTests(unittest.TestCase):
             json={"login": "bob"},
         ).json()
         ciphertext = b"\x00" * 32 + b"ciphertext-with-gcm-tag"
-        for forbidden in ("filename", "key", "nonce", "sha256", "object_id", "media_type"):
+        for forbidden in ("filename", "key", "nonce", "sha256", "object_id", "media_type", "is_encrypted"):
             response = self.client.post(
                 "/api/v1/media/attachments",
                 headers=self.headers(alice),
@@ -241,7 +241,25 @@ class StageSixMediaTests(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 422, (forbidden, response.text))
 
-    def test_sticker_message_uses_typed_payload(self) -> None:
+    def test_attachment_size_limit_is_checked_before_storage(self) -> None:
+        alice = self.register_and_login("size-alice")
+        self.register_and_login("size-bob")
+        chat = self.client.post(
+            "/api/v1/chats/dm",
+            headers=self.headers(alice),
+            json={"login": "size-bob"},
+        ).json()
+        with mock.patch("app.routers.media.MAX_ATTACHMENT_BYTES", 32):
+            response = self.client.post(
+                "/api/v1/media/attachments",
+                headers=self.headers(alice),
+                files={"ciphertext": ("ciphertext.bin", b"x" * 33, "application/octet-stream")},
+                data={"chat_id": str(chat["id"])},
+            )
+        self.assertEqual(response.status_code, 413, response.text)
+        self.assertEqual(list(self.media_dir.rglob("*.bin")), [])
+
+    def test_sticker_plaintext_websocket_payload_is_rejected(self) -> None:
         alice = self.register_and_login("alice")
         self.register_and_login("bob")
         chat = self.client.post(
@@ -249,8 +267,6 @@ class StageSixMediaTests(unittest.TestCase):
             headers=self.headers(alice),
             json={"login": "bob"},
         ).json()
-        pack = self.create_pack(alice)
-        sticker = self.add_sticker(alice, pack["id"])
         with self.client.websocket_connect(
             "/api/v1/realtime/ws",
             subprotocols=[f"bearer.{alice}"],
@@ -261,11 +277,11 @@ class StageSixMediaTests(unittest.TestCase):
                     "kind": "sticker",
                     "chat_id": chat["id"],
                     "content": "",
-                    "sticker_id": sticker["id"],
+                    "sticker_id": str(uuid4()),
                     "client_id": str(uuid4()),
                 }
             )
             message = websocket.receive_json()
-        self.assertEqual(message["kind"], "sticker")
-        self.assertEqual(message["content"], "")
-        self.assertEqual(message["sticker"]["id"], sticker["id"])
+        self.assertEqual(message["type"], "error")
+        self.assertIn("opaque MLS envelopes", message["detail"])
+        self.assertNotIn("kind", message)

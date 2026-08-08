@@ -149,6 +149,7 @@ async def upload_encrypted_attachment(
         "name", "filename", "media_type", "plaintext_content_type",
         "mime_type", "key", "nonce", "cipher", "width", "height",
         "sha256", "object_id",
+        "is_encrypted",
     }
     if forbidden_metadata:
         raise HTTPException(status_code=422, detail="Attachment metadata belongs inside the MLS ciphertext")
