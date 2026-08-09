@@ -28,6 +28,8 @@
 15. [Фундамент backend и миграций](foundation.md)
 16. [Production deployment](production-deploy.md)
 17. [Browser compatibility](browser-compatibility.md)
+18. [План завершения E2EE и production-релиза](e2ee-release-plan.md)
+19. [Dependency audit policy](dependency-audit.md)
 
 Слова **MUST**, **MUST NOT**, **SHOULD** и **MAY** обозначают обязательное,
 запрещённое, рекомендуемое и необязательное поведение.
