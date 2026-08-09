@@ -8,6 +8,7 @@ import {
   assertAuthenticatedPayloadSender,
   decodeApplicationPayload,
   encodeApplicationPayload,
+  preflightApplicationPayload,
   validateApplicationPayload,
 } from '../src/crypto/applicationPayload.js'
 
@@ -67,6 +68,20 @@ test('encode then decode round-trips a text message', () => {
   assert.equal(decoded.content, 'secret')
   assert.equal(decoded.kind, 'text')
   assert.equal(decoded.type, 'message')
+})
+
+test('canonical encoding is byte-identical across input field order and rejects alternate JSON', () => {
+  const id = clientId()
+  const first = encodeApplicationPayload({
+    client_id: id, sender_device_id: DEVICE_ID, sent_at: ISO, kind: 'text', content: 'secret',
+  })
+  const second = encodeApplicationPayload({
+    content: 'secret', kind: 'text', sent_at: ISO, sender_device_id: DEVICE_ID, client_id: id,
+  })
+  assert.deepEqual(first, second)
+
+  const nonCanonical = new TextEncoder().encode(JSON.stringify(baseMessage({ client_id: id })))
+  assert.throws(() => decodeApplicationPayload(nonCanonical), /canonically encoded/)
 })
 
 test('encode strips local UI fields and survives the forbidden-field check', () => {
@@ -293,6 +308,18 @@ test('encode rejects unknown outbound fields instead of silently downgrading sch
     client_id: clientId(), sender_device_id: DEVICE_ID, sent_at: ISO,
     kind: 'text', content: 'hello', future_option: true,
   }), /Unknown outbound/)
+})
+
+test('payload limit is rejected before the caller mutates UI state', () => {
+  let uiStateChanged = false
+  assert.throws(() => {
+    preflightApplicationPayload({
+      client_id: clientId(), sent_at: ISO, kind: 'text',
+      content: 'x'.repeat(APPLICATION_PAYLOAD_LIMITS.textBytes + 1),
+    }, DEVICE_ID)
+    uiStateChanged = true
+  }, /size limit/)
+  assert.equal(uiStateChanged, false)
 })
 
 test('decode rejects non-UTF-8 and non-JSON corruption', () => {

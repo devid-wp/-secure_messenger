@@ -19,6 +19,7 @@ import {
   decryptEnvelope,
   e2eeAvailable,
   encryptAndPublish,
+  preflightApplicationPayload,
   removeRevokedDevice,
   removeMlsMembers,
   rotateMlsEpoch,
@@ -876,6 +877,12 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       reply_to_sender: replyingTo?.sender ?? null,
       reply_to_content: replyingTo?.content ?? null,
     }
+    try {
+      preflightApplicationPayload(pendingMessage, deviceId)
+    } catch (validationError) {
+      setError(validationError.message || 'Message exceeds encrypted payload limits')
+      return
+    }
     outboxRef.current = [...outboxRef.current, pendingMessage]
     writeOutbox(login, outboxRef.current)
     setMessages((previous) => [...previous, pendingMessage])
@@ -1509,6 +1516,12 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       reply_to_sender: null,
       reply_to_content: null,
     }
+    try {
+      preflightApplicationPayload(pendingMessage, deviceId)
+    } catch (validationError) {
+      setError(validationError.message || 'Sticker exceeds encrypted payload limits')
+      return
+    }
     outboxRef.current = [...outboxRef.current, pendingMessage]
     writeOutbox(login, outboxRef.current)
     setMessages((previous) => [...previous, pendingMessage])
@@ -1637,6 +1650,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
         timestamp: new Date().toISOString(),
         status: 'sending',
       }
+      preflightApplicationPayload(pendingMessage, deviceId)
       outboxRef.current = [...outboxRef.current, pendingMessage]
       writeOutbox(login, outboxRef.current)
       setMessages((previous) => [...previous, pendingMessage])

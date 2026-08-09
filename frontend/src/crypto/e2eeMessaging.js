@@ -4,7 +4,7 @@ import {
   removeMlsDevices, updateMlsGroup,
 } from './mlsRuntimeBridge'
 import { synchronizeDeviceMls } from './e2eeBootstrap'
-import { assertAuthenticatedPayloadSender, decodeApplicationPayload, encodeApplicationPayload } from './applicationPayload'
+import { assertAuthenticatedPayloadSender, decodeApplicationPayload, encodeApplicationPayload, preflightApplicationPayload as preflightPayload } from './applicationPayload'
 import { classifyMlsError, isExpectedMlsError, MLS_ERROR_CODES, MlsEnvelopeError } from './mlsErrors'
 import { assertMlsSendingAllowed, blockMlsSending, explicitMlsResync, mlsSendingBlocked } from './mlsSendPolicy'
 
@@ -153,6 +153,10 @@ export async function encryptAndPublish(token, chatId, message) {
   const plaintext = encodeApplicationPayload({ ...message, sender_device_id: senderDeviceId, reply })
   const encrypted = await encryptMls(chatId, plaintext)
   return publishEnvelope(token, chatId, 'application', encrypted.epoch, encrypted.ciphertext)
+}
+
+export function preflightApplicationPayload(message, senderDeviceId) {
+  return preflightPayload(message, senderDeviceId)
 }
 
 export async function decryptEnvelope(chatId, envelope) {

@@ -112,6 +112,18 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (!isPlainObject(value)) return value
+  return Object.fromEntries(
+    Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]),
+  )
+}
+
+function canonicalJson(value) {
+  return JSON.stringify(canonicalize(value))
+}
+
 function assertBoundedString(value, name, { min = 1, max }) {
   if (typeof value !== 'string') throw new Error(`${name} must be a string`)
   const size = encoder.encode(value).byteLength
@@ -256,7 +268,11 @@ export function encodeApplicationPayload(body) {
   // Outbound payloads are built from the per-type allowlist. Local UI state,
   // type-inference markers and future fields therefore cannot cross the MLS
   // boundary by accident. Inbound payloads remain strict and reject extras.
-  return encoder.encode(JSON.stringify(validateApplicationPayload(value)))
+  return encoder.encode(canonicalJson(validateApplicationPayload(value)))
+}
+
+export function preflightApplicationPayload(body, senderDeviceId) {
+  return encodeApplicationPayload({ ...body, sender_device_id: senderDeviceId })
 }
 
 export function decodeApplicationPayload(bytes) {
@@ -277,6 +293,7 @@ export function decodeApplicationPayload(bytes) {
     throw new Error('MLS payload is not valid JSON')
   }
   const payload = validateApplicationPayload(parsed)
+  if (text !== canonicalJson(payload)) throw new Error('MLS payload is not canonically encoded')
   // Return the body fields flat so the existing call sites can render
   // message text, edits and reactions without an extra `.body` hop. The
   // canonical wire shape (validateApplicationPayload) is still strictly
@@ -320,7 +337,7 @@ export function validateApplicationPayload(value) {
     throw new Error('MLS payload sent_at must be ISO-8601')
   }
   validateBody(value.type, value.body)
-  if (encoder.encode(JSON.stringify(value)).byteLength > MAX_ENCODED_BYTES) {
+  if (encoder.encode(canonicalJson(value)).byteLength > MAX_ENCODED_BYTES) {
     throw new Error('MLS payload exceeds 64 KiB limit')
   }
   return value

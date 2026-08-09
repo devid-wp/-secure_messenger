@@ -39,6 +39,25 @@ test('received attachments derive only their opaque download URL', () => {
   assert.deepEqual(message.attachment, { content_url: `/api/v1/media/${objectId}/content` })
 })
 
+test('unauthenticated envelope fields cannot override displayed MLS content', () => {
+  const sentAt = '2026-08-08T09:10:11.000Z'
+  const [message] = applyMessageLifecycle([{
+    item: {
+      type: 'message', client_id: id(), kind: 'text', content: 'authenticated',
+      sender: 'alice', sender_device_id: DEVICE_A, sent_at: sentAt,
+    },
+    envelope: {
+      id: 'mls:9', mls_epoch: 4, timestamp: '1999-01-01T00:00:00.000Z',
+      content: 'injected', sender: 'mallory', kind: 'system', deleted_at: sentAt,
+    },
+  }])
+  assert.equal(message.content, 'authenticated')
+  assert.equal(message.sender, 'alice')
+  assert.equal(message.kind, 'text')
+  assert.equal(message.timestamp, sentAt)
+  assert.equal(message.deleted_at, undefined)
+})
+
 test('reply, reaction and receipts are resolved after out-of-order delivery', () => {
   const target = id()
   const replyId = id()
