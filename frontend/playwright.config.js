@@ -11,11 +11,14 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:5173',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
-    ...devices['Desktop Chrome'],
   },
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+  ],
   webServer: [
     {
-      command: 'uv run --with-requirements requirements-dev.txt --with uvicorn python scripts/run_e2e_server.py',
+      command: 'python scripts/run_e2e_server.py',
       cwd: '..',
       url: 'http://127.0.0.1:8000/docs',
       timeout: 120_000,
