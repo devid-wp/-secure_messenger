@@ -45,7 +45,7 @@ struct WireOutput {
     epoch: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ProcessOutput {
     Application { plaintext: String, epoch: u64 },
@@ -53,8 +53,15 @@ enum ProcessOutput {
     Proposal { epoch: u64 },
 }
 
+#[cfg(target_arch = "wasm32")]
 fn error(message: impl ToString) -> JsValue {
     JsValue::from_str(&message.to_string())
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn error(_message: impl ToString) -> JsValue {
+    // `JsValue::from_str` is only implemented by the wasm-bindgen runtime.
+    // Native tests only need the Result boundary when asserting rejection.
+    JsValue::NULL
 }
 fn json<T: Serialize>(value: &T) -> Result<String, JsValue> {
     serde_json::to_string(value).map_err(error)
@@ -426,6 +433,36 @@ mod tests {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
+    fn two_member_group(chat_id: &str) -> (WasmMlsClient, WasmMlsClient) {
+        let alice = WasmMlsClient::new("alice-device".into(), vec![]).unwrap();
+        let bob = WasmMlsClient::new("bob-device".into(), vec![]).unwrap();
+        alice.create_group(chat_id.into()).unwrap();
+        let bootstrap: Bootstrap = serde_json::from_str(&bob.bootstrap(1).unwrap()).unwrap();
+        let packages = serde_json::to_string(&bootstrap.key_packages).unwrap();
+        let added: AddOutput =
+            serde_json::from_str(&alice.add_members(chat_id.into(), packages).unwrap()).unwrap();
+        bob.join_group(B64.decode(added.welcome).unwrap()).unwrap();
+        (alice, bob)
+    }
+
+    fn wire_message(client: &WasmMlsClient, chat_id: &str, plaintext: &[u8]) -> WireOutput {
+        serde_json::from_str(
+            &client
+                .encrypt(chat_id.into(), plaintext.to_vec())
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn process_output(client: &WasmMlsClient, chat_id: &str, message: &str) -> ProcessOutput {
+        serde_json::from_str(
+            &client
+                .process(chat_id.into(), B64.decode(message).unwrap())
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
     #[wasm_bindgen_test]
     fn state_round_trip_preserves_identity_and_key_packages() {
         let first = WasmMlsClient::new("pwa-device".into(), vec![]).unwrap();
@@ -597,5 +634,112 @@ mod tests {
         )
         .unwrap();
         assert_eq!(remaining, vec!["owner-device"]);
+    }
+
+    #[test]
+    fn replay_and_duplicate_application_messages_are_rejected() {
+        let chat_id = "replay-group";
+        let (alice, bob) = two_member_group(chat_id);
+        let message = wire_message(&alice, chat_id, b"deliver exactly once");
+
+        assert!(matches!(
+            process_output(&bob, chat_id, &message.message),
+            ProcessOutput::Application { epoch: 1, .. }
+        ));
+        assert!(
+            bob.process(chat_id.into(), B64.decode(&message.message).unwrap())
+                .is_err(),
+            "replaying identical MLS ciphertext must be rejected"
+        );
+    }
+
+    #[test]
+    fn application_messages_can_be_delivered_out_of_order_once() {
+        let chat_id = "application-reorder-group";
+        let (alice, bob) = two_member_group(chat_id);
+        let first = wire_message(&alice, chat_id, b"first");
+        let second = wire_message(&alice, chat_id, b"second");
+
+        let second_output = process_output(&bob, chat_id, &second.message);
+        let first_output = process_output(&bob, chat_id, &first.message);
+        assert!(matches!(
+            second_output,
+            ProcessOutput::Application { epoch: 1, .. }
+        ));
+        assert!(matches!(
+            first_output,
+            ProcessOutput::Application { epoch: 1, .. }
+        ));
+        assert!(
+            bob.process(chat_id.into(), B64.decode(first.message).unwrap())
+                .is_err(),
+            "an out-of-order message must still be consumable only once"
+        );
+    }
+
+    #[test]
+    fn delayed_old_epoch_application_is_rejected_after_commit() {
+        let chat_id = "delayed-old-epoch-group";
+        let (alice, bob) = two_member_group(chat_id);
+        let delayed = wire_message(&alice, chat_id, b"epoch one");
+        let update: WireOutput =
+            serde_json::from_str(&alice.self_update(chat_id.into()).unwrap()).unwrap();
+
+        assert!(matches!(
+            process_output(&bob, chat_id, &update.message),
+            ProcessOutput::Commit { epoch: 2 }
+        ));
+        assert!(
+            bob.process(chat_id.into(), B64.decode(delayed.message).unwrap())
+                .is_err(),
+            "an application delayed past its epoch must be rejected"
+        );
+    }
+
+    #[test]
+    fn future_epoch_application_waits_for_the_missing_commit() {
+        let chat_id = "future-epoch-group";
+        let (alice, bob) = two_member_group(chat_id);
+        let update: WireOutput =
+            serde_json::from_str(&alice.self_update(chat_id.into()).unwrap()).unwrap();
+        let future = wire_message(&alice, chat_id, b"epoch two");
+
+        assert!(
+            bob.process(chat_id.into(), B64.decode(&future.message).unwrap())
+                .is_err(),
+            "an application from a future epoch must be rejected until its Commit arrives"
+        );
+        assert!(matches!(
+            process_output(&bob, chat_id, &update.message),
+            ProcessOutput::Commit { epoch: 2 }
+        ));
+        assert!(matches!(
+            process_output(&bob, chat_id, &future.message),
+            ProcessOutput::Application { epoch: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn reordered_commit_is_rejected_then_applies_after_the_missing_commit() {
+        let chat_id = "commit-reorder-group";
+        let (alice, bob) = two_member_group(chat_id);
+        let epoch_two: WireOutput =
+            serde_json::from_str(&alice.self_update(chat_id.into()).unwrap()).unwrap();
+        let epoch_three: WireOutput =
+            serde_json::from_str(&alice.self_update(chat_id.into()).unwrap()).unwrap();
+
+        assert!(
+            bob.process(chat_id.into(), B64.decode(&epoch_three.message).unwrap())
+                .is_err(),
+            "Commit for epoch three must not skip the epoch two Commit"
+        );
+        assert!(matches!(
+            process_output(&bob, chat_id, &epoch_two.message),
+            ProcessOutput::Commit { epoch: 2 }
+        ));
+        assert!(matches!(
+            process_output(&bob, chat_id, &epoch_three.message),
+            ProcessOutput::Commit { epoch: 3 }
+        ));
     }
 }
