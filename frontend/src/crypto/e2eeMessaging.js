@@ -118,6 +118,15 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
     if (!String(error).includes('already exists')) throw error
   }
   const currentMembers = new Set(await listMlsMembers(chatId))
+  const expectedDevices = new Set(devices.map((device) => device.device_id))
+  const removedDevices = [...currentMembers].filter((memberDeviceId) => (
+    memberDeviceId !== deviceId && !expectedDevices.has(memberDeviceId)
+  ))
+  if (removedDevices.length) {
+    const removed = await removeMlsDevices(chatId, removedDevices)
+    await publishEnvelope(token, chatId, 'commit', removed.epoch, removed.commit)
+    for (const removedDeviceId of removedDevices) currentMembers.delete(removedDeviceId)
+  }
   const missingDevices = devices.filter((device) => device.device_id !== deviceId && !currentMembers.has(device.device_id))
   if (!missingDevices.length) return
   const packages = []
