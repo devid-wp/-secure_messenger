@@ -3,6 +3,7 @@ import { test } from 'vitest'
 import {
   APPLICATION_PAYLOAD_TYPES,
   APPLICATION_PAYLOAD_VERSION,
+  APPLICATION_PAYLOAD_LIMITS,
   MAX_APPLICATION_PAYLOAD_BYTES,
   assertAuthenticatedPayloadSender,
   decodeApplicationPayload,
@@ -25,6 +26,20 @@ function baseMessage(overrides = {}) {
     sender_device_id: DEVICE_ID,
     sent_at: ISO,
     body: { kind: 'text', content: 'hello' },
+    ...overrides,
+  }
+}
+
+function attachmentDescriptor(overrides = {}) {
+  return {
+    version: 1,
+    algorithm: 'AES-256-GCM',
+    object_id: clientId(),
+    key: btoa(String.fromCharCode(...new Uint8Array(32).fill(1))),
+    nonce: btoa(String.fromCharCode(...new Uint8Array(12).fill(2))),
+    plaintext_size: 10,
+    ciphertext_size: 26,
+    sha256: btoa(String.fromCharCode(...new Uint8Array(32).fill(3))),
     ...overrides,
   }
 }
@@ -176,13 +191,7 @@ test('group_metadata requires a non-empty string name', () => {
 })
 
 test('attachment descriptor must not carry filename or MIME type', () => {
-  const descriptor = {
-    version: 1,
-    algorithm: 'AES-256-GCM',
-    object_id: clientId(),
-    key: 'base64',
-    nonce: 'base64',
-  }
+  const descriptor = attachmentDescriptor()
   assert.doesNotThrow(() => validateApplicationPayload({
     ...baseMessage(),
     type: 'attachment',
@@ -192,12 +201,12 @@ test('attachment descriptor must not carry filename or MIME type', () => {
     ...baseMessage(),
     type: 'attachment',
     body: { attachment_descriptor: { ...descriptor, name: 'leak.txt' } },
-  }), /filename or MIME/)
+  }), /Unknown attachment descriptor field/)
   assert.throws(() => validateApplicationPayload({
     ...baseMessage(),
     type: 'attachment',
     body: { attachment_descriptor: { ...descriptor, media_type: 'image/png' } },
-  }), /filename or MIME/)
+  }), /Unknown attachment descriptor field/)
   assert.throws(() => validateApplicationPayload({
     ...baseMessage(),
     type: 'attachment',
@@ -211,13 +220,7 @@ test('attachment descriptor must not carry filename or MIME type', () => {
 })
 
 test('encode strips optimistic UI fields from an attachment', () => {
-  const descriptor = {
-    version: 1,
-    algorithm: 'AES-256-GCM',
-    object_id: clientId(),
-    key: 'base64',
-    nonce: 'base64',
-  }
+  const descriptor = attachmentDescriptor()
   const payload = JSON.parse(new TextDecoder().decode(encodeApplicationPayload({
     id: 'pending:attachment',
     chat_id: 7,
@@ -233,6 +236,63 @@ test('encode strips optimistic UI fields from an attachment', () => {
   })))
   assert.equal(payload.type, 'attachment')
   assert.deepEqual(payload.body, { attachment_descriptor: descriptor })
+})
+
+test('text schema rejects wrong types, cross-kind fields, extras and limits', () => {
+  assert.throws(() => validateApplicationPayload(baseMessage({ body: { kind: 1, content: 'x' } })), /kind/)
+  assert.throws(() => validateApplicationPayload(baseMessage({ body: { kind: 'text', content: 7 } })), /string/)
+  assert.throws(() => validateApplicationPayload(baseMessage({ body: { kind: 'text', content: 'x', sticker: {} } })), /another message kind/)
+  assert.throws(() => validateApplicationPayload(baseMessage({ body: { kind: 'text', content: 'x', extra: true } })), /not allowed/)
+  assert.throws(() => validateApplicationPayload(baseMessage({
+    body: { kind: 'text', content: 'x'.repeat(APPLICATION_PAYLOAD_LIMITS.textBytes + 1) },
+  })), /size limit/)
+})
+
+test('receipt schema rejects wrong types and extra fields', () => {
+  const target = clientId()
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(), type: 'receipt', body: { target_client_id: target, state: 1 },
+  }), /state/)
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(), type: 'receipt', body: { target_client_id: target, state: 'read', read_at: ISO },
+  }), /forbidden/)
+})
+
+test('attachment schema rejects missing, extra, mistyped and oversized descriptor fields', () => {
+  const payload = (descriptor) => ({ ...baseMessage(), type: 'attachment', body: { attachment_descriptor: descriptor } })
+  const { sha256, ...missing } = attachmentDescriptor()
+  assert.throws(() => validateApplicationPayload(payload(missing)), /required/)
+  assert.throws(() => validateApplicationPayload(payload(attachmentDescriptor({ extension: 'png' }))), /Unknown/)
+  assert.throws(() => validateApplicationPayload(payload(attachmentDescriptor({ plaintext_size: '10' }))), /plaintext_size/)
+  assert.throws(() => validateApplicationPayload(payload(attachmentDescriptor({
+    plaintext_size: APPLICATION_PAYLOAD_LIMITS.attachmentBytes + 1,
+    ciphertext_size: APPLICATION_PAYLOAD_LIMITS.attachmentBytes + 17,
+  }))), /size limit/)
+  assert.throws(() => validateApplicationPayload(payload(attachmentDescriptor({ key: btoa('short') }))), /wrong length/)
+})
+
+test('membership event schema is an explicit bounded enum', () => {
+  for (const event of ['member_added', 'member_removed', 'member_left', 'device_added', 'device_removed', 'credential_changed']) {
+    assert.doesNotThrow(() => validateApplicationPayload({
+      ...baseMessage(), type: 'device_event', body: { event },
+    }))
+  }
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(), type: 'device_event', body: { event: 'made_admin' },
+  }), /membership event/)
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(), type: 'device_event', body: { event: 42 },
+  }), /string/)
+  assert.throws(() => validateApplicationPayload({
+    ...baseMessage(), type: 'device_event', body: { event: 'member_added', actor: 'alice' },
+  }), /not allowed/)
+})
+
+test('encode rejects unknown outbound fields instead of silently downgrading schema', () => {
+  assert.throws(() => encodeApplicationPayload({
+    client_id: clientId(), sender_device_id: DEVICE_ID, sent_at: ISO,
+    kind: 'text', content: 'hello', future_option: true,
+  }), /Unknown outbound/)
 })
 
 test('decode rejects non-UTF-8 and non-JSON corruption', () => {
