@@ -121,14 +121,21 @@ top-level fields, malformed UUID/timestamps, mutation targets, and payloads over
 
 | Type | Required body fields | Optional body fields |
 |---|---|---|
-| `message` | `kind` | `text`, `content`, `sticker`, `reply: {target_client_id}` |
-| `edit` | `target_client_id` (UUID), `content` (non-empty string) | – |
+| `message` | `kind` ∈ {`text`,`sticker`} | text: `content` (1–16384 UTF-8 bytes); sticker: `sticker`; `reply: {target_client_id}` |
+| `edit` | `target_client_id` (UUID), `content` (1–16384 UTF-8 bytes) | – |
 | `delete` | `target_client_id` (UUID) | – |
-| `reaction` | `target_client_id` (UUID), `emoji` (non-empty string) | – |
+| `reaction` | `target_client_id` (UUID), `emoji` (1–64 UTF-8 bytes) | – |
 | `receipt` | `target_client_id` (UUID), `state` ∈ {`delivered`,`read`} | – |
-| `attachment` | `attachment_descriptor` | – |
-| `group_metadata` | `name` (non-empty string) | – |
-| `device_event` | `event` | – |
+| `attachment` | strict `attachment_descriptor` v1 | – |
+| `group_metadata` | `name` (1–255 UTF-8 bytes) | – |
+| `device_event` | `event` ∈ {`member_added`,`member_removed`,`member_left`,`device_added`,`device_removed`,`credential_changed`} | – |
+
+The v1 attachment descriptor contains exactly `version`, `object_id`,
+`algorithm`, `key`, `nonce`, `plaintext_size`, `ciphertext_size`, and `sha256`.
+The key, nonce, and digest use canonical Base64 and decode to 32, 12, and 32
+bytes respectively. Sizes are positive safe integers, plaintext is bounded by
+the 50 MiB transport limit, and AES-GCM ciphertext size is exactly plaintext
+size plus the 16-byte authentication tag.
 
 The wire body MUST NOT carry any of these fields — they are stripped before
 encryption and rejected after decryption:
@@ -163,6 +170,8 @@ mutation that targets an unknown or foreign client_id.
 - `sent_at` that is not a strict ISO-8601 timestamp;
 - body fields not in the per-type schema or fields forbidden above;
 - missing required body fields for the given type;
+- wrong field types, per-field UTF-8 size limit violations, or unknown outbound
+  fields (known local UI bookkeeping is stripped before encryption);
 - `attachment_descriptor` carrying `name`, `file_name`, `mime_type`,
   `media_type`, an unknown `algorithm`, an unknown `version` or a non-UUID
   `object_id`.
