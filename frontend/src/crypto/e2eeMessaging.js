@@ -6,6 +6,7 @@ import {
 import { synchronizeDeviceMls } from './e2eeBootstrap'
 import { assertAuthenticatedPayloadSender, decodeApplicationPayload, encodeApplicationPayload } from './applicationPayload'
 import { classifyMlsError, isExpectedMlsError, MLS_ERROR_CODES, MlsEnvelopeError } from './mlsErrors'
+import { assertMlsSendingAllowed, blockMlsSending, explicitMlsResync, mlsSendingBlocked } from './mlsSendPolicy'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const deviceOwners = new Map()
@@ -19,11 +20,12 @@ function authenticatedSender(envelope) {
   return owner
 }
 
-function reportMlsIssue(error, envelope) {
+function reportMlsIssue(error, envelope, chatId) {
   const classified = classifyMlsError(error)
+  if (!isExpectedMlsError(classified)) blockMlsSending(chatId, classified)
   if (typeof globalThis.dispatchEvent === 'function' && typeof globalThis.CustomEvent === 'function') {
     globalThis.dispatchEvent(new CustomEvent('secure-messenger:mls-error', {
-      detail: { code: classified.code, envelopeId: envelope?.id ?? null, epoch: envelope?.epoch ?? null },
+      detail: { code: classified.code, chatId, blocked: mlsSendingBlocked(chatId), envelopeId: envelope?.id ?? null, epoch: envelope?.epoch ?? null },
     }))
   }
   return classified
@@ -93,9 +95,9 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
       if (envelope.content_type === 'welcome') await joinMlsGroup(wire)
       else await processMls(chatId, wire)
     } catch (error) {
-      const classified = reportMlsIssue(error, envelope)
+      const classified = reportMlsIssue(error, envelope, chatId)
       if (classified.code === MLS_ERROR_CODES.MISSING_COMMIT) deferred.push(envelope)
-      else if (!isExpectedMlsError(classified)) continue
+      else if (!isExpectedMlsError(classified)) throw classified
     }
   }
   for (const envelope of deferred) {
@@ -104,8 +106,8 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
       if (envelope.content_type === 'welcome') await joinMlsGroup(wire)
       else await processMls(chatId, wire)
     } catch (error) {
-      const classified = reportMlsIssue(error, envelope)
-      if (!isExpectedMlsError(classified)) continue
+      const classified = reportMlsIssue(error, envelope, chatId)
+      if (!isExpectedMlsError(classified)) throw classified
     }
   }
 
@@ -143,6 +145,8 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
 }
 
 export async function encryptAndPublish(token, chatId, message) {
+  // Check the fail-closed state before serializing application plaintext.
+  assertMlsSendingAllowed(chatId)
   const senderDeviceId = localDevicesByChat.get(chatId)
   if (!senderDeviceId) throw new Error('MLS group must be synchronized before publishing')
   const reply = message.reply_to_client_id ? { target_client_id: message.reply_to_client_id } : undefined
@@ -168,8 +172,16 @@ export async function decryptEnvelope(chatId, envelope) {
     value.sender = sender
     return value
   } catch (error) {
-    throw reportMlsIssue(error, envelope)
+    throw reportMlsIssue(error, envelope, chatId)
   }
+}
+
+export function isMlsSendingBlocked(chatId) {
+  return mlsSendingBlocked(chatId)
+}
+
+export function resynchronizeMlsGroup(token, deviceId, chatId) {
+  return explicitMlsResync(chatId, () => synchronizeMlsGroup(token, deviceId, chatId))
 }
 
 export async function removeRevokedDevice(token, chatIds, deviceId) {

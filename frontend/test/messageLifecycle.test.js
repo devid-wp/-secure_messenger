@@ -59,5 +59,6 @@ test('MLS errors are classified without exposing cryptographic internals to UI',
   assert.equal(classifyMlsError(new Error('Duplicate message')).code, MLS_ERROR_CODES.DUPLICATE)
   assert.equal(classifyMlsError(new Error('message from a future epoch')).code, MLS_ERROR_CODES.MISSING_COMMIT)
   assert.equal(classifyMlsError(new Error('AEAD decryption failed')).code, MLS_ERROR_CODES.CORRUPTED_CIPHERTEXT)
+  assert.equal(classifyMlsError(new Error('confirmation tag transcript mismatch')).code, MLS_ERROR_CODES.CORRUPTED_CIPHERTEXT)
   assert.equal(classifyMlsError(new Error('unexpected MLS message')).code, MLS_ERROR_CODES.PROTOCOL_VIOLATION)
 })

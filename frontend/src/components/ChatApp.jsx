@@ -22,6 +22,7 @@ import {
   removeRevokedDevice,
   removeMlsMembers,
   rotateMlsEpoch,
+  resynchronizeMlsGroup,
   synchronizeMlsGroup,
 } from '../crypto/e2eeMessaging'
 import { decryptAttachment, encryptAttachment, MAX_ATTACHMENT_BYTES } from '../crypto/attachmentCrypto'
@@ -218,10 +219,14 @@ function ChatApp({ token, login, deviceId, onLogout }) {
   const [securityEvents, setSecurityEvents] = useState([])
   const [inputText, setInputText] = useState('')
   const [error, setError] = useState('')
+  const [mlsBlockedChats, setMlsBlockedChats] = useState(() => new Set())
 
   useEffect(() => {
     const handleMlsError = (event) => {
       const code = event.detail?.code
+      if (event.detail?.blocked && event.detail?.chatId !== undefined) {
+        setMlsBlockedChats((current) => new Set(current).add(String(event.detail.chatId)))
+      }
       if (code && ![MLS_ERROR_CODES.DUPLICATE, MLS_ERROR_CODES.STALE_EPOCH].includes(code)) {
         setError(`Encrypted envelope rejected (${code}).`)
       }
@@ -898,6 +903,22 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       setMessages((previous) => previous.map((message) => (
         message.client_id === clientId ? { ...message, status: 'failed' } : message
       )))
+    }
+  }
+
+  const resyncSelectedChat = async () => {
+    if (selectedChatId === null) return
+    try {
+      await resynchronizeMlsGroup(token, deviceId, selectedChatId)
+      setMlsBlockedChats((current) => {
+        const next = new Set(current)
+        next.delete(String(selectedChatId))
+        return next
+      })
+      setError('MLS resync completed. Encrypted sending is enabled.')
+      setHistoryRefresh((value) => value + 1)
+    } catch (resyncError) {
+      setError(resyncError.message || 'MLS resync failed; encrypted sending remains blocked')
     }
   }
 
@@ -1783,6 +1804,16 @@ function ChatApp({ token, login, deviceId, onLogout }) {
               <button type="button" onClick={() => acknowledgeSecurityEvent(securityEvent.id)}>Reviewed</button>
             </div>
           ))}
+          {mlsBlockedChats.has(String(selectedChatId)) && (
+            <div className="security-warning" role="alert">
+              <Icon name="shield" />
+              <span>
+                <strong>Encrypted sending blocked</strong>
+                <small>An ambiguous MLS error requires an explicit resync. Plaintext fallback is disabled.</small>
+              </span>
+              <button type="button" onClick={resyncSelectedChat}>Resync MLS</button>
+            </div>
+          )}
           {!wsReady && <div className="offline-banner">Connection interrupted. Queued messages will retry automatically.</div>}
           {error && <p className="error-message" role="alert">{error}<button type="button" onClick={() => setError('')} aria-label="Dismiss error">×</button></p>}
           {nextCursor && (
@@ -1890,13 +1921,13 @@ function ChatApp({ token, login, deviceId, onLogout }) {
           }}
           onAttach={() => attachmentInputRef.current?.click()}
           conversation={selectedConversation}
-          disabled={selectedChatId === null || !e2eeAvailable()}
+          disabled={selectedChatId === null || !e2eeAvailable() || mlsBlockedChats.has(String(selectedChatId))}
         />
         <input
           ref={attachmentInputRef}
           className="visually-hidden"
           type="file"
-          disabled={attachmentBusy || selectedChatId === null || !e2eeAvailable()}
+          disabled={attachmentBusy || selectedChatId === null || !e2eeAvailable() || mlsBlockedChats.has(String(selectedChatId))}
           onChange={(event) => {
             void chooseAttachment(event.target.files)
             event.target.value = ''
