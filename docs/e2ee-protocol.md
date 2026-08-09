@@ -111,11 +111,14 @@ MLS доверяет Authentication Service в привязке credential к id
 - Outer envelope не повторяет sender user name или application content type.
 
 Application data uses this canonical versioned JSON object before MLS
-encryption: `{"version":1,"type":"message","client_id":"uuid","sender_device_id":"uuid","sent_at":"ISO-8601","body":{...}}`.
+encryption: `{"body":{...},"client_id":"uuid","sender_device_id":"uuid","sent_at":"ISO-8601","type":"message","version":1}`.
 Supported types are `message`, `edit`, `delete`, `reaction`, `receipt`,
 `attachment`, `group_metadata`, and `device_event`. Unknown versions, types,
 top-level fields, malformed UUID/timestamps, mutation targets, and payloads over
 64 KiB are rejected after authenticated MLS decryption and before rendering.
+Canonical encoding is UTF-8 JSON with recursively lexicographically sorted
+object keys, array order preserved, and no insignificant whitespace. Receivers
+reject semantically equivalent JSON with different key order or whitespace.
 
 #### Per-type body schemas
 
@@ -180,7 +183,15 @@ mutation that targets an unknown or foreign client_id.
 throws before MLS encryption if the caller did not supply a valid
 `client_id` UUID, an ISO-8601 `sent_at` (or `timestamp` fallback) and the
 required body fields for the inferred type. Local UI bookkeeping fields
-are stripped before encryption.
+are stripped before encryption. The UI runs this complete encoding preflight
+before writing to the outbox, adding an optimistic message, clearing the
+composer, or otherwise committing message state.
+
+Only fields obtained from the authenticated MLS application payload may affect
+rendered message content, kind, sender, replies, mutations, membership events,
+or timestamps. Outer delivery-envelope fields are restricted to opaque event
+identity and MLS epoch metadata; they cannot override rendered content. Media
+download URLs are derived locally from the authenticated attachment object ID.
 
 #### Replay, ordering and MLS errors
 
