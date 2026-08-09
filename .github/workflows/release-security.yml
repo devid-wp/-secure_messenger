@@ -21,6 +21,8 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-dev.lock
+      - name: Reject explicitly skipped security tests
+        run: python scripts/check_no_skipped_security_tests.py
       - name: Install hash-pinned Python dependencies
         run: python -m pip install --require-hashes -r requirements-dev.lock
       - name: Run complete backend test suite
@@ -86,6 +88,14 @@ jobs:
       - name: Run E2EE in Chromium and Firefox
         working-directory: frontend
         run: npm run test:e2e
+
+      - name: Verify dependency lockfiles stayed unchanged
+        run: |
+          git diff --exit-code -- \
+            requirements.lock \
+            requirements-dev.lock \
+            frontend/package-lock.json \
+            frontend/src-wasm/Cargo.lock
 
       - name: Preserve dependency audit results
         if: always()
