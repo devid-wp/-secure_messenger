@@ -91,6 +91,11 @@ class E2eeDeliveryApiTests(unittest.TestCase):
         bob, _ = self.register_and_login("bob")
         self.publish_identity(alice, 1)
         self.publish_identity(bob, 2)
+        self.client.post(
+            "/api/v1/chats/dm",
+            headers=self.headers(alice),
+            json={"login": "bob"},
+        )
         package = bytes(range(64))
         published = self.client.post(
             "/api/v1/e2ee/key-packages",
@@ -121,6 +126,11 @@ class E2eeDeliveryApiTests(unittest.TestCase):
         bob, _ = self.register_and_login("bob-inventory")
         self.publish_identity(alice, 3)
         self.publish_identity(bob, 4)
+        self.client.post(
+            "/api/v1/chats/dm",
+            headers=self.headers(alice),
+            json={"login": "bob-inventory"},
+        )
         payload = {
             "key_packages": [self.encoded(bytes([index]) * 64) for index in (5, 6)],
             "cipher_suite": 1,
@@ -142,6 +152,79 @@ class E2eeDeliveryApiTests(unittest.TestCase):
             "/api/v1/e2ee/key-packages/status", headers=self.headers(bob)
         )
         self.assertEqual(after.json(), {"available": 1, "cipher_suite": 1})
+
+    def test_expired_key_packages_are_unclaimable_and_replenished(self) -> None:
+        alice, _ = self.register_and_login("alice-expiry")
+        bob, _ = self.register_and_login("bob-expiry")
+        self.publish_identity(alice, 51)
+        self.publish_identity(bob, 52)
+        self.client.post(
+            "/api/v1/chats/dm",
+            headers=self.headers(alice),
+            json={"login": "bob-expiry"},
+        )
+        package = self.encoded(bytes([53]) * 64)
+        published = self.client.post(
+            "/api/v1/e2ee/key-packages",
+            headers=self.headers(bob),
+            json={
+                "key_packages": [package],
+                "cipher_suite": 1,
+                "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            },
+        )
+        self.assertEqual(published.status_code, 201, published.text)
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute(
+                "UPDATE mls_key_packages SET expires_at = ?",
+                ((datetime.now(timezone.utc) - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S.%f"),),
+            )
+            connection.commit()
+
+        inventory = self.client.get(
+            "/api/v1/e2ee/key-packages/status", headers=self.headers(bob)
+        )
+        claimed = self.client.post(
+            "/api/v1/e2ee/users/bob-expiry/key-packages/claim",
+            headers=self.headers(alice),
+        )
+        self.assertEqual(inventory.json(), {"available": 0, "cipher_suite": 1})
+        self.assertEqual(claimed.json(), [])
+
+        replenished = self.client.post(
+            "/api/v1/e2ee/key-packages",
+            headers=self.headers(bob),
+            json={
+                "key_packages": [self.encoded(bytes([54]) * 64)],
+                "cipher_suite": 1,
+                "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            },
+        )
+        self.assertEqual(replenished.status_code, 201, replenished.text)
+        inventory = self.client.get(
+            "/api/v1/e2ee/key-packages/status", headers=self.headers(bob)
+        )
+        self.assertEqual(inventory.json(), {"available": 1, "cipher_suite": 1})
+
+    def test_key_packages_cannot_be_claimed_without_shared_chat(self) -> None:
+        alice, _ = self.register_and_login("alice-no-shared-chat")
+        bob, _ = self.register_and_login("bob-no-shared-chat")
+        self.publish_identity(alice, 61)
+        self.publish_identity(bob, 62)
+        self.client.post(
+            "/api/v1/e2ee/key-packages",
+            headers=self.headers(bob),
+            json={
+                "key_packages": [self.encoded(bytes([63]) * 64)],
+                "cipher_suite": 1,
+                "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            },
+        )
+        rejected = self.client.post(
+            "/api/v1/e2ee/users/bob-no-shared-chat/key-packages/claim",
+            headers=self.headers(alice),
+        )
+        self.assertEqual(rejected.status_code, 403, rejected.text)
 
     def test_unsupported_ciphersuite_is_rejected(self) -> None:
         token, _ = self.register_and_login("wrong-suite")

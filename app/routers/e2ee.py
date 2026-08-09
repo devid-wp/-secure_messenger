@@ -334,13 +334,31 @@ async def claim_key_packages(
     current_device: Device = Depends(get_active_device),
     session: AsyncSession = Depends(get_db),
 ):
+    target_user = await session.scalar(
+        select(User).where(
+            User.login == login,
+            User.is_active.is_(True),
+            User.is_placeholder.is_(False),
+        )
+    )
+    if target_user is None:
+        raise HTTPException(status_code=404, detail="Active target user not found")
+    shared_chat = await session.scalar(
+        select(ChatMember.chat_id)
+        .where(ChatMember.user_id == current_device.user_id)
+        .intersect(
+            select(ChatMember.chat_id).where(ChatMember.user_id == target_user.id)
+        )
+        .limit(1)
+    )
+    if shared_chat is None:
+        raise HTTPException(status_code=403, detail="Target user is not in a shared chat")
     target_devices = list(
         await session.scalars(
             select(Device)
             .join(User)
             .where(
-                User.login == login,
-                User.is_active.is_(True),
+                User.id == target_user.id,
                 Device.revoked_at.is_(None),
                 Device.identity_key.is_not(None),
                 Device.id != current_device.id,
@@ -357,6 +375,7 @@ async def claim_key_packages(
                 MlsKeyPackage.device_id == device.id,
                 MlsKeyPackage.claimed_at.is_(None),
                 MlsKeyPackage.expires_at > now,
+                MlsKeyPackage.cipher_suite == MLS_CIPHER_SUITE,
             )
             .order_by(MlsKeyPackage.created_at, MlsKeyPackage.id)
             .with_for_update(skip_locked=True)
@@ -400,6 +419,7 @@ async def claim_device_key_package(
             MlsKeyPackage.device_id == target.id,
             MlsKeyPackage.claimed_at.is_(None),
             MlsKeyPackage.expires_at > datetime.now(timezone.utc),
+            MlsKeyPackage.cipher_suite == MLS_CIPHER_SUITE,
         ).order_by(MlsKeyPackage.created_at, MlsKeyPackage.id).with_for_update(skip_locked=True)
     )
     if package is None:
