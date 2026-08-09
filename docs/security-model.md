@@ -98,6 +98,24 @@ abuse control и ограниченного аудита:
 События membership передаются как MLS authenticated content. Серверный audit
 не считается доказательством для клиента без криптографического подтверждения.
 
+## Browser/PWA delivery boundary
+
+Production PWA delivery is same-origin and HTTPS-only. The document CSP denies
+everything by default, permits scripts and module Workers only from the
+application origin, and grants WebAssembly compilation only through
+`'wasm-unsafe-eval'`. It does not grant JavaScript `'unsafe-eval'`, inline
+scripts, objects, frames, a base URL, or arbitrary network destinations.
+`connect-src 'self'` confines HTTP and WebSocket transport to the deployment
+origin. HSTS, `no-referrer`, nosniff, frame denial, and a restrictive
+Permissions Policy are emitted by the frontend ingress.
+
+There are no analytics, tag managers, remote fonts, third-party scripts, or
+runtime CDN imports. JSX containing `dangerouslySetInnerHTML` fails lint. npm
+dependencies are installed from the committed lockfile with `npm ci`; the Rust
+WASM graph is fixed by `Cargo.lock`. A CSP reduces XSS probability but cannot
+make a compromised same-origin build safe: build provenance and dependency
+review remain part of the cryptographic trust boundary.
+
 ## Остаточные риски и последующие меры
 
 До key transparency сервер Authentication Service теоретически способен

@@ -1,6 +1,9 @@
 # Secure Messenger
 
-FastAPI and React messenger with an OpenMLS WebAssembly cryptographic boundary.
+Browser-only FastAPI and React messenger with an OpenMLS WebAssembly
+cryptographic boundary. The server stores and routes opaque MLS envelopes and
+encrypted attachment bytes; message and attachment plaintext exists only in an
+unlocked browser endpoint.
 
 ## Open as a Windows application
 
@@ -33,18 +36,28 @@ from the browser menu. An installed PWA receives its own Start menu entry and
 taskbar icon and does not require the BAT launcher afterward.
 
 The PWA runs pinned OpenMLS WebAssembly in a dedicated Worker. Its MLS state is
-AES-GCM encrypted in IndexedDB with a non-extractable WebCrypto key; it uses the
-same opaque MLS envelope transport in every supported browser.
+AES-GCM encrypted in IndexedDB by a random DEK wrapped with a
+passphrase-derived, non-extractable WebCrypto key. It uses the same opaque MLS
+envelope transport in every supported browser.
 
 ## Development
 
-```powershell
+```shell
 cd frontend
-npm install
+npm ci
 npm run lint
+npm run typecheck
 npm run build
+npm test
+
+cd ..
+python -m pytest
 ```
 
 Backend development and deployment use standard FastAPI, Alembic and pytest
 commands. Architecture and security documentation is under
-[docs](docs/README.md).
+[docs](docs/README.md). For production, start with
+[the deployment runbook](docs/production-deploy.md); the
+[security model](docs/security-model.md), [vault recovery policy](docs/local-vault-backup-recovery.md),
+and [browser compatibility matrix](docs/browser-compatibility.md) describe the
+important trust and recovery boundaries.
