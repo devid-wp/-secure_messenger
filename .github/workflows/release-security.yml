@@ -70,6 +70,7 @@ jobs:
         run: |
           cargo fmt --check
           cargo check --locked --target wasm32-unknown-unknown
+          cargo test --locked
       - name: Audit Rust dependency graph
         id: cargo_audit
         continue-on-error: true

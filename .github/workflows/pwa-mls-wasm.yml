@@ -51,7 +51,9 @@ jobs:
         run: cargo fmt --check
       - name: Compile OpenMLS for WASM
         working-directory: frontend/src-wasm
-        run: cargo check --locked --target wasm32-unknown-unknown
+        run: |
+          cargo check --locked --target wasm32-unknown-unknown
+          cargo test --locked
       - name: Build PWA
         working-directory: frontend
         run: npm ci && npm run build

@@ -68,7 +68,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   })
 
   const aliceSession = await registerLoginAndCreateVault(alice, 'e2ealice')
-  await registerLoginAndCreateVault(bob, 'e2ebob')
+  const bobSession = await registerLoginAndCreateVault(bob, 'e2ebob')
 
   await selectConversation(alice, 'e2ebob')
   await reloadAndUnlock(bob)
@@ -129,6 +129,15 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
     lostWelcome = envelopes.find((item) => item.content_type === 'welcome' && item.recipient_device_id === lostSession.device_id) || null
     return Boolean(lostWelcome)
   }).toBeTruthy()
+  const membershipEnvelopes = await (await request.get(
+    `http://127.0.0.1:8000/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`,
+    { headers: { Authorization: `Bearer ${aliceSession.access_token}` } },
+  )).json()
+  const addCommit = membershipEnvelopes.find((item) => (
+    item.content_type === 'commit' && item.epoch === lostWelcome.epoch
+  ))
+  expect(addCommit, 'adding the independent lost-device profile publishes an Add Commit').toBeTruthy()
+  expect(addCommit.epoch).toBeGreaterThan(newestApplication.epoch)
   await reloadAndUnlock(aliceLost)
   const lostJoined = await aliceLost.evaluate(async ({ chatId, deviceId, payload }) => {
     const bridge = await import('/src/crypto/mlsRuntimeBridge.js')
@@ -142,6 +151,20 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
     return members.includes(deviceId)
   }, { chatId: newestApplication.chat_id, deviceId: lostSession.device_id, payload: lostWelcome.payload })
   expect(lostJoined).toBeTruthy()
+
+  await reloadAndUnlock(bob)
+  await expect(bob.getByText(MESSAGE)).toBeVisible()
+  await expect(bob.getByText('Contact credential or device set changed')).toBeVisible()
+  const updateEpoch = await bob.evaluate(async ({ chatId, token }) => {
+    const bridge = await import('/src/crypto/mlsRuntimeBridge.js')
+    const messaging = await import('/src/crypto/e2eeMessaging.js')
+    const update = await bridge.updateMlsGroup(chatId)
+    const envelope = await messaging.publishEnvelope(token, chatId, 'commit', update.epoch, update.commit)
+    return envelope.epoch
+  }, { chatId: newestApplication.chat_id, token: bobSession.access_token })
+  expect(updateEpoch, 'Update Commit advances the epoch in an independent profile').toBe(addCommit.epoch + 1)
+  await reloadAndUnlock(alice)
+  await expect(alice.getByText(MESSAGE)).toBeVisible()
   await aliceLostContext.setOffline(true)
 
   await alice.getByRole('button', { name: 'Main menu' }).click()
@@ -152,11 +175,22 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await expect(alice.getByText(/MLS Remove Commit applied in 1 conversation/)).toBeVisible()
   await alice.getByRole('dialog', { name: 'Trusted devices' }).getByRole('button', { name: 'Close' }).click()
 
+  const afterRevokeEnvelopes = await (await request.get(
+    `http://127.0.0.1:8000/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`,
+    { headers: { Authorization: `Bearer ${aliceSession.access_token}` } },
+  )).json()
+  const removeCommit = afterRevokeEnvelopes
+    .filter((item) => item.content_type === 'commit' && item.epoch > updateEpoch)
+    .sort((left, right) => right.epoch - left.epoch)[0]
+  expect(removeCommit, 'revoking the offline profile publishes a Remove Commit').toBeTruthy()
+  expect(removeCommit.epoch).toBe(updateEpoch + 1)
+
   const afterRemoval = 'E2E_SENTINEL_after_device_removal'
   const previousApplicationId = newestApplication?.id
   await alice.getByRole('textbox', { name: 'Message', exact: true }).fill(afterRemoval)
   await alice.getByRole('button', { name: 'Send message' }).click()
   await expect.poll(() => newestApplication?.id).not.toBe(previousApplicationId)
+  expect(newestApplication.epoch).toBe(removeCommit.epoch)
   const rejected = await aliceLost.evaluate(async ({ chatId, payload }) => {
     try {
       const bridge = await import('/src/crypto/mlsRuntimeBridge.js')
