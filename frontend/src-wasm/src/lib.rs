@@ -742,4 +742,67 @@ mod tests {
             ProcessOutput::Commit { epoch: 3 }
         ));
     }
+
+    #[test]
+    fn corrupted_ciphertext_is_rejected_without_plaintext() {
+        let chat_id = "corrupted-ciphertext-group";
+        let (alice, bob) = two_member_group(chat_id);
+        let message = wire_message(&alice, chat_id, b"authenticated plaintext");
+        let mut corrupted = B64.decode(message.message).unwrap();
+        let last = corrupted.len() - 1;
+        corrupted[last] ^= 0x01;
+
+        assert!(
+            bob.process(chat_id.into(), corrupted.clone()).is_err(),
+            "a one-bit ciphertext modification must fail authentication"
+        );
+        assert_eq!(
+            bob.cached_application(corrupted).unwrap(),
+            None,
+            "failed authentication must never populate the plaintext cache"
+        );
+    }
+
+    #[test]
+    fn forked_commit_with_mismatched_transcript_is_rejected() {
+        let chat_id = "forked-transcript-group";
+        let alice = WasmMlsClient::new("alice-device".into(), vec![]).unwrap();
+        let bob = WasmMlsClient::new("bob-device".into(), vec![]).unwrap();
+        let observer = WasmMlsClient::new("observer-device".into(), vec![]).unwrap();
+        alice.create_group(chat_id.into()).unwrap();
+
+        let bob_package: Bootstrap = serde_json::from_str(&bob.bootstrap(1).unwrap()).unwrap();
+        let observer_package: Bootstrap =
+            serde_json::from_str(&observer.bootstrap(1).unwrap()).unwrap();
+        let packages = serde_json::to_string(&vec![
+            bob_package.key_packages[0].clone(),
+            observer_package.key_packages[0].clone(),
+        ])
+        .unwrap();
+        let added: AddOutput =
+            serde_json::from_str(&alice.add_members(chat_id.into(), packages).unwrap()).unwrap();
+        let welcome = B64.decode(added.welcome).unwrap();
+        bob.join_group(welcome.clone()).unwrap();
+        observer.join_group(welcome).unwrap();
+
+        // Both members commit from epoch 1, creating two valid but divergent
+        // transcript branches. Once the observer chooses Alice's branch, the
+        // competing Bob branch must not merge into it.
+        let alice_branch: WireOutput =
+            serde_json::from_str(&alice.self_update(chat_id.into()).unwrap()).unwrap();
+        let bob_branch: WireOutput =
+            serde_json::from_str(&bob.self_update(chat_id.into()).unwrap()).unwrap();
+        assert_eq!(alice_branch.epoch, 2);
+        assert_eq!(bob_branch.epoch, 2);
+        assert!(matches!(
+            process_output(&observer, chat_id, &alice_branch.message),
+            ProcessOutput::Commit { epoch: 2 }
+        ));
+        assert!(
+            observer
+                .process(chat_id.into(), B64.decode(bob_branch.message).unwrap())
+                .is_err(),
+            "a Commit from a competing transcript fork must be rejected"
+        );
+    }
 }
