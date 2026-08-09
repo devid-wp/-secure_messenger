@@ -8,9 +8,9 @@ from pathlib import Path
 
 
 SKIP_MARKERS = (
-    re.compile(r"\bpytest\.(?:mark\.skip(?:if)?|skip)\b"),
-    re.compile(r"\bunittest\.skip(?:If|Unless)?\b"),
-    re.compile(r"\b(?:describe|it|test)\.skip\s*\("),
+    re.compile(r"\bpytest\.(?:mark\.(?:skip(?:if)?|xfail)|skip|xfail)\b"),
+    re.compile(r"\bunittest\.(?:skip(?:If|Unless)?|expectedFailure)\b"),
+    re.compile(r"\b(?:describe|it|test)\.(?:skip|fixme|todo)\s*\("),
     re.compile(r"#\s*\[ignore(?:\s*=|\s*\()"),
     re.compile(r"#\s*\[ignore\s*\]"),
 )
