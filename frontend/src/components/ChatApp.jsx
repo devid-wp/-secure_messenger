@@ -25,6 +25,7 @@ import {
   resynchronizeMlsGroup,
   synchronizeMlsGroup,
 } from '../crypto/e2eeMessaging'
+import { listMlsCredentials } from '../crypto/mlsRuntimeBridge'
 import { decryptAttachment, encryptAttachment, MAX_ATTACHMENT_BYTES } from '../crypto/attachmentCrypto'
 import { createSafetyCode } from '../crypto/safetyCode'
 import { applyMessageLifecycle } from '../crypto/messageLifecycle'
@@ -1212,11 +1213,13 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     if (!contactLogin) return
     setChatMenuOpen(false); setVerificationBusy(true)
     try {
+      await synchronizeMlsGroup(token, deviceId, selectedChatId)
       const responses = await Promise.all([login, contactLogin].map((name) => fetch(
         `${API_URL}/api/v1/e2ee/users/${encodeURIComponent(name)}/identities`, { headers: authHeaders },
       )))
       if (responses.some((response) => !response.ok)) throw new Error('Could not load device identities')
-      const code = await createSafetyCode(await Promise.all(responses.map((response) => response.json())))
+      const identities = await Promise.all(responses.map((response) => response.json()))
+      const code = await createSafetyCode(identities, await listMlsCredentials(selectedChatId))
       setVerification({ contactLogin, code: code.display, qr: await QRCode.toDataURL(code.qrPayload, { errorCorrectionLevel: 'M', margin: 1, width: 240 }) })
     } catch (caught) { setError(caught.message) } finally { setVerificationBusy(false) }
   }
@@ -1798,8 +1801,8 @@ function ChatApp({ token, login, deviceId, onLogout }) {
             <div className="security-warning" role="alert" key={securityEvent.id}>
               <Icon name="shield" />
               <span>
-                <strong>Contact safety fingerprint changed</strong>
-                <small>Device {securityEvent.device_id?.slice(0, 8) || 'unknown'} · verify the safety code before trusting new messages.</small>
+                <strong>Contact credential or device set changed</strong>
+                <small>Device {securityEvent.device_id?.slice(0, 8) || 'unknown'} · compare the new safety code before trusting new messages.</small>
               </span>
               <button type="button" onClick={() => acknowledgeSecurityEvent(securityEvent.id)}>Reviewed</button>
             </div>
@@ -2074,7 +2077,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       {verification && (
         <Modal title={`Verify @${verification.contactLogin}`} onClose={() => setVerification(null)}>
           <div className="devices-panel">
-            <p>Compare this QR code or all 60 digits over an authenticated channel. A match verifies every currently active device.</p>
+            <p>Compare this QR code or all 60 digits over an authenticated channel. The code includes every active device credential verified against the current MLS tree.</p>
             <img src={verification.qr} width="240" height="240" alt="Contact safety QR code" />
             <code className="profile-identity">{verification.code}</code>
             <p className="devices-panel__notice">The code changes when either participant adds, replaces, or revokes an identity.</p>

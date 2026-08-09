@@ -33,6 +33,13 @@ struct GroupState {
 }
 
 #[derive(Serialize, Deserialize)]
+struct DeviceCredential {
+    device_id: String,
+    identity_key: String,
+    fingerprint: String,
+}
+
+#[derive(Serialize, Deserialize)]
 struct AddOutput {
     commit: String,
     welcome: String,
@@ -254,6 +261,24 @@ impl WasmMlsClient {
             &group
                 .members()
                 .map(|m| String::from_utf8_lossy(m.credential.serialized_content()).into_owned())
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    pub fn group_credentials(&self, chat_id: String) -> Result<String, JsValue> {
+        let group = self.load_group(&chat_id)?;
+        json(
+            &group
+                .members()
+                .map(|member| DeviceCredential {
+                    device_id: String::from_utf8_lossy(member.credential.serialized_content())
+                        .into_owned(),
+                    identity_key: B64.encode(&member.signature_key),
+                    fingerprint: Sha256::digest(&member.signature_key)
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect(),
+                })
                 .collect::<Vec<_>>(),
         )
     }
@@ -526,6 +551,19 @@ mod tests {
             assert!(members.contains(&"alice-device".to_string()));
             assert!(members.contains(&"bob-phone".to_string()));
             assert!(members.contains(&"bob-browser".to_string()));
+            let credentials: Vec<DeviceCredential> = serde_json::from_str(
+                &client.group_credentials(chat_id.into()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(credentials.len(), 3);
+            assert!(credentials.iter().all(|credential| {
+                B64.decode(&credential.identity_key)
+                    .map(|key| Sha256::digest(key)
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>() == credential.fingerprint)
+                    .unwrap_or(false)
+            }));
         }
 
         let alice_update: WireOutput =
