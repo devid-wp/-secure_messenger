@@ -22,6 +22,20 @@ test('encrypting a file that exceeds the size limit fails before allocation', as
   await assert.rejects(encryptAttachment(tooBig))
 })
 
+test('an attachment exactly at the production size limit round-trips', async () => {
+  const source = new Uint8Array(MAX_ATTACHMENT_BYTES)
+  source[0] = 0x51
+  source[source.length - 1] = 0xa7
+  const { ciphertext, descriptor } = await encryptAttachment(
+    makeFile('maximum.bin', source, 'application/octet-stream'),
+  )
+  assert.equal(descriptor.plaintext_size, MAX_ATTACHMENT_BYTES)
+  assert.equal(ciphertext.byteLength, MAX_ATTACHMENT_BYTES + 16)
+  const recovered = await decryptAttachment(ciphertext, descriptor)
+  assert.equal(recovered[0], 0x51)
+  assert.equal(recovered[recovered.length - 1], 0xa7)
+})
+
 test('descriptor must not carry leaked plaintext metadata', async () => {
   const source = new TextEncoder().encode('hello')
   const file = makeFile('hello.txt', source, 'text/plain')
