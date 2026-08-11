@@ -32,12 +32,10 @@ The generated static files are written to `dist`.
 The repository-level `compose.yaml` builds this frontend and serves it through
 Nginx at `http://localhost:8080` for local testing only. Nginx also proxies API
 and WebSocket traffic to the backend container. Production must place it behind
-an HTTPS ingress as described in `docs/production-deploy.md`; browser E2EE must
-never be delivered over public HTTP.
+an HTTPS ingress; browser E2EE must never be delivered over public HTTP.
 
 ## Requirements
 
-- Node.js 20 or newer
-- npm
-- Rust with the `wasm32-unknown-unknown` target
+- Node.js 20.19.0 and npm 10.8.2
+- Rust 1.88.0 with the `wasm32-unknown-unknown` target
 - `wasm-bindgen-cli` 0.2.126

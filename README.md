@@ -42,6 +42,10 @@ envelope transport in every supported browser.
 
 ## Development
 
+Supported toolchain: Python 3.12.11, Node.js 20.19.0 with npm 10.8.2, and
+Rust 1.88.0 with the `wasm32-unknown-unknown` target. Dependency installation
+must use the committed lockfiles; do not use unpinned installation commands.
+
 ```shell
 cd frontend
 npm ci
@@ -55,9 +59,6 @@ python -m pytest
 ```
 
 Backend development and deployment use standard FastAPI, Alembic and pytest
-commands. Architecture and security documentation is under
-[docs](docs/README.md). For production, start with
-[the deployment runbook](docs/production-deploy.md); the
-[security model](docs/security-model.md), [vault recovery policy](docs/local-vault-backup-recovery.md),
-and [browser compatibility matrix](docs/browser-compatibility.md) describe the
-important trust and recovery boundaries.
+commands. The `docs/` directory is reserved for the current release
+documentation and will be populated with the deployment, security and recovery
+runbooks before release.
