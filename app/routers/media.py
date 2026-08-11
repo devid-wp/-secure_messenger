@@ -41,6 +41,7 @@ from app.schemas import (
 
 router = APIRouter(tags=["media"])
 MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
+MAX_ATTACHMENT_STORAGE_BYTES_PER_USER = 500 * 1024 * 1024
 MAX_STICKER_SOURCE_BYTES = 5 * 1024 * 1024
 STICKER_SIZE = 512
 STICKER_TYPES = {"image/png", "image/webp"}
@@ -156,6 +157,12 @@ async def upload_encrypted_attachment(
     if await session.get(ChatMember, (chat_id, current_user.id)) is None:
         raise HTTPException(status_code=404, detail="Chat not found")
     content = await _read_limited(ciphertext, MAX_ATTACHMENT_BYTES)
+    used_bytes = await session.scalar(select(func.coalesce(func.sum(MediaObject.size_bytes), 0)).where(
+        MediaObject.owner_user_id == current_user.id,
+        MediaObject.purpose == "attachment",
+    ))
+    if int(used_bytes or 0) + len(content) > MAX_ATTACHMENT_STORAGE_BYTES_PER_USER:
+        raise HTTPException(status_code=413, detail="Encrypted attachment storage quota exceeded")
     # Belt-and-braces: reject any upload whose body looks like plaintext
     # by checking that the first bytes match the AES-GCM framing we
     # expect on the wire. The browser never sends anything else, but a

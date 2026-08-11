@@ -122,7 +122,7 @@ class FoundationMigrationTests(unittest.TestCase):
                 connection.execute(
                     "SELECT version_num FROM alembic_version"
                 ).fetchone()[0],
-                "20260805_20",
+                "20260807_22",
             )
             self.assertEqual(
                 connection.execute("PRAGMA foreign_key_check").fetchall(),
@@ -149,6 +149,20 @@ class FoundationMigrationTests(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
                 ).fetchone()
             )
+            tables = {
+                row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            chat_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(chats)")
+            }
+            media_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(media_objects)")
+            }
+            self.assertTrue({"messages", "message_receipts"}.isdisjoint(tables))
+            self.assertTrue({"name", "next_message_seq"}.isdisjoint(chat_columns))
+            self.assertTrue({"key_envelope", "nonce", "cipher"}.isdisjoint(media_columns))
             placeholders = connection.execute(
                 """
                 SELECT login

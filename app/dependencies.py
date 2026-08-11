@@ -23,12 +23,10 @@ async def get_current_user(
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized")
     token = authorization.removeprefix("Bearer ")
-    await request.app.state.rate_limiter.check(
-        f"api:{request.client.host if request.client else 'unknown'}"
-    )
     session_data = await request.app.state.session_store.resolve(token)
     if session_data is None:
         raise HTTPException(status_code=401, detail="Invalid token")
+    await request.app.state.rate_limiter.check(f"api:device:{session_data.device_id}")
     device = await session.get(Device, session_data.device_id)
     user = await session.get(User, session_data.user_id)
     if device is not None and device.status == "pending" and device.revoked_at is None:
@@ -55,6 +53,7 @@ async def get_current_device(
     session_data = await request.app.state.session_store.resolve(token)
     if session_data is None:
         raise HTTPException(status_code=401, detail="Invalid token")
+    await request.app.state.rate_limiter.check(f"api:device:{session_data.device_id}")
     device = await session.get(Device, session_data.device_id)
     user = await session.get(User, session_data.user_id)
     if (

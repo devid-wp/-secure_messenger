@@ -409,8 +409,6 @@ class MediaObject(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     is_encrypted: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    cipher: Mapped[Optional[str]] = mapped_column(String(32))
-    nonce: Mapped[Optional[str]] = mapped_column(String(64))
     width: Mapped[Optional[int]] = mapped_column(Integer)
     height: Mapped[Optional[int]] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(

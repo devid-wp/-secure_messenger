@@ -1,10 +1,10 @@
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -26,6 +26,17 @@ from app.schemas import (
 router = APIRouter(prefix="/e2ee", tags=["e2ee"])
 MLS_CIPHER_SUITE = 1
 MLS_PROTOCOL_VERSION = 1
+MAX_KEY_PACKAGES_PER_DEVICE = 100
+MAX_KEY_PACKAGE_LIFETIME = timedelta(days=7)
+MLS_ENVELOPE_RETENTION = timedelta(days=30)
+
+
+async def _purge_expired_envelopes(session: AsyncSession, chat_id: int) -> None:
+    cutoff = datetime.now(timezone.utc) - MLS_ENVELOPE_RETENTION
+    await session.execute(delete(MlsEnvelope).where(
+        MlsEnvelope.chat_id == chat_id,
+        MlsEnvelope.created_at < cutoff,
+    ))
 
 
 def _envelope_response(envelope: MlsEnvelope) -> dict:
@@ -52,6 +63,7 @@ async def publish_mls_envelope(
 ):
     if await session.get(ChatMember, (chat_id, current_device.user_id)) is None:
         raise HTTPException(status_code=404, detail="Chat not found")
+    await _purge_expired_envelopes(session, chat_id)
     recipient = None
     if request_body.content_type == "welcome":
         if request_body.recipient_device_id is None:
@@ -110,6 +122,8 @@ async def list_mls_envelopes(
 ):
     if await session.get(ChatMember, (chat_id, current_device.user_id)) is None:
         raise HTTPException(status_code=404, detail="Chat not found")
+    await _purge_expired_envelopes(session, chat_id)
+    await session.commit()
     rows = await session.scalars(select(MlsEnvelope).where(
         MlsEnvelope.chat_id == chat_id,
         MlsEnvelope.id > after,
@@ -292,9 +306,23 @@ async def publish_key_packages(
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="KeyPackages must expire in future")
+    if expires_at > datetime.now(timezone.utc) + MAX_KEY_PACKAGE_LIFETIME:
+        raise HTTPException(status_code=422, detail="KeyPackage retention exceeds 7 days")
     packages = [bytes(item) for item in request_body.key_packages]
     if any(not 64 <= len(item) <= 65_536 for item in packages):
         raise HTTPException(status_code=422, detail="Invalid KeyPackage size")
+    now = datetime.now(timezone.utc)
+    await session.execute(delete(MlsKeyPackage).where(
+        MlsKeyPackage.device_id == current_device.id,
+        MlsKeyPackage.expires_at <= now,
+    ))
+    available = await session.scalar(select(func.count(MlsKeyPackage.id)).where(
+        MlsKeyPackage.device_id == current_device.id,
+        MlsKeyPackage.claimed_at.is_(None),
+        MlsKeyPackage.expires_at > now,
+    ))
+    if (available or 0) + len(packages) > MAX_KEY_PACKAGES_PER_DEVICE:
+        raise HTTPException(status_code=429, detail="KeyPackage quota exceeded")
     for package in packages:
         session.add(
             MlsKeyPackage(

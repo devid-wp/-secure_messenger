@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
@@ -206,6 +207,44 @@ class E2eeDeliveryApiTests(unittest.TestCase):
         )
         self.assertEqual(inventory.json(), {"available": 1, "cipher_suite": 1})
 
+    def test_key_package_quota_retention_and_extra_fields_fail_closed(self) -> None:
+        token, _ = self.register_and_login("key-package-policy")
+        self.publish_identity(token, 55)
+        endpoint = "/api/v1/e2ee/key-packages"
+        package = self.encoded(bytes([56]) * 64)
+        too_long = self.client.post(endpoint, headers=self.headers(token), json={
+            "key_packages": [package], "cipher_suite": 1,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=8)).isoformat(),
+        })
+        self.assertEqual(too_long.status_code, 422, too_long.text)
+        extra = self.client.post(endpoint, headers=self.headers(token), json={
+            "key_packages": [package], "cipher_suite": 1,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            "plaintext": "must be rejected",
+        })
+        self.assertEqual(extra.status_code, 422, extra.text)
+        with mock.patch("app.routers.e2ee.MAX_KEY_PACKAGES_PER_DEVICE", 1):
+            first = self.client.post(endpoint, headers=self.headers(token), json={
+                "key_packages": [package], "cipher_suite": 1,
+                "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            })
+            second = self.client.post(endpoint, headers=self.headers(token), json={
+                "key_packages": [self.encoded(bytes([57]) * 64)], "cipher_suite": 1,
+                "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            })
+        self.assertEqual(first.status_code, 201, first.text)
+        self.assertEqual(second.status_code, 429, second.text)
+
+    def test_e2ee_endpoints_are_rate_limited(self) -> None:
+        token, _ = self.register_and_login("rate-limited-e2ee")
+        limiter = self.client.app.state.rate_limiter
+        limiter._counts.clear()
+        limiter.limit = 1
+        first = self.client.get("/api/v1/e2ee/key-packages/status", headers=self.headers(token))
+        second = self.client.get("/api/v1/e2ee/key-packages/status", headers=self.headers(token))
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 429, second.text)
+
     def test_key_packages_cannot_be_claimed_without_shared_chat(self) -> None:
         alice, _ = self.register_and_login("alice-no-shared-chat")
         bob, _ = self.register_and_login("bob-no-shared-chat")
@@ -365,6 +404,35 @@ class E2eeDeliveryApiTests(unittest.TestCase):
         ) as websocket:
             websocket.send_json({"type": "send_message", "content": sentinel})
             self.assertEqual(websocket.receive_json()["type"], "error")
+        with sqlite3.connect(self.database_path) as connection:
+            self.assertEqual(connection.execute("SELECT count(*) FROM mls_envelopes").fetchone()[0], 0)
+
+    def test_envelopes_expire_after_documented_retention_window(self) -> None:
+        alice, _ = self.register_and_login("retention-alice")
+        self.register_and_login("retention-bob")
+        chat_id = self.client.post(
+            "/api/v1/chats/dm", headers=self.headers(alice), json={"login": "retention-bob"},
+        ).json()["id"]
+        published = self.client.post(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes",
+            headers=self.headers(alice),
+            json={
+                "protocol_version": 1, "epoch": 0, "content_type": "application",
+                "payload": self.encoded(b"opaque-retained-ciphertext"),
+            },
+        )
+        self.assertEqual(published.status_code, 201, published.text)
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute(
+                "UPDATE mls_envelopes SET created_at = ? WHERE id = ?",
+                ((datetime.now(timezone.utc) - timedelta(days=31)).strftime("%Y-%m-%d %H:%M:%S.%f"), published.json()["id"]),
+            )
+            connection.commit()
+        inbox = self.client.get(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes", headers=self.headers(alice),
+        )
+        self.assertEqual(inbox.status_code, 200, inbox.text)
+        self.assertEqual(inbox.json(), [])
         with sqlite3.connect(self.database_path) as connection:
             self.assertEqual(connection.execute("SELECT count(*) FROM mls_envelopes").fetchone()[0], 0)
 
