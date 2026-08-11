@@ -18,13 +18,15 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.12.11"
           cache: pip
           cache-dependency-path: requirements-dev.lock
       - name: Reject explicitly skipped security tests
         run: python scripts/check_no_skipped_security_tests.py
       - name: Install hash-pinned Python dependencies
         run: python -m pip install --require-hashes -r requirements-dev.lock
+      - name: Verify migrations on a clean database
+        run: DATABASE_URL=sqlite+aiosqlite:////tmp/secure-messenger-ci.db APP_ENV=test python -m alembic upgrade head
       - name: Run complete backend test suite
         id: backend_tests
         continue-on-error: true
@@ -38,7 +40,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "20.19.0"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install lockfile-exact frontend dependencies
@@ -82,6 +84,10 @@ jobs:
       - name: Build browser MLS application
         working-directory: frontend
         run: npm run build
+      - name: Build production container images
+        run: |
+          docker build --tag secure-messenger-backend:ci .
+          docker build --tag secure-messenger-frontend:ci frontend
       - name: Install Chromium and Firefox
         working-directory: frontend
         run: npx playwright install --with-deps chromium firefox
@@ -108,5 +114,5 @@ jobs:
       - name: Enforce dependency audit policy
         if: steps.backend_tests.outcome == 'failure' || steps.pip_audit.outcome == 'failure' || steps.npm_audit.outcome == 'failure' || steps.cargo_audit.outcome == 'failure'
         run: |
-          echo "A backend test or dependency audit failed. Fix tests, or record an approved audit exception in docs/dependency-audit.md."
+          echo "A backend test or dependency audit failed. Fix the failure, or record an approved audit exception in the release documentation."
           exit 1

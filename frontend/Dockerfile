@@ -1,4 +1,4 @@
-FROM rust:1.88-alpine AS wasm
+FROM rust:1.88.0-alpine AS wasm
 
 RUN apk add --no-cache musl-dev && rustup target add wasm32-unknown-unknown
 RUN cargo install wasm-bindgen-cli --version 0.2.126 --locked
@@ -9,7 +9,7 @@ RUN cargo build --locked --release --target wasm32-unknown-unknown \
     && wasm-bindgen target/wasm32-unknown-unknown/release/secure_messenger_mls_wasm.wasm \
        --target web --out-dir /wasm-generated --out-name mls
 
-FROM node:20-alpine AS build
+FROM node:20.19.0-alpine AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./
