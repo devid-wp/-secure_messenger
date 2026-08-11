@@ -7,6 +7,8 @@ const CHANGED_VAULT_PASSWORD = 'changed-local-vault-password-456'
 const MESSAGE = 'E2E_SENTINEL_8c36f2b4_message'
 const OFFLINE_MESSAGE = 'E2E_SENTINEL_54e2c00a_offline_reconnect'
 const FILE_PLAINTEXT = 'E2E_SENTINEL_71db60e9_file'
+const GROUP_NAME = 'E2E_SENTINEL_a934e8f1_group_name'
+const GROUP_MESSAGE = 'E2E_SENTINEL_f7c4102a_group_message'
 
 async function registerLoginAndCreateVault(page, login) {
   await page.goto('/')
@@ -44,6 +46,66 @@ async function selectConversation(page, username) {
   await conversation.click()
   await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled()
 }
+
+test('group membership delivers encrypted metadata and application messages', async ({ browser, request }) => {
+  const ownerContext = await browser.newContext()
+  const memberContext = await browser.newContext()
+  const owner = await ownerContext.newPage()
+  const member = await memberContext.newPage()
+  const observedBodies = []
+
+  for (const page of [owner, member]) {
+    page.on('request', (networkRequest) => {
+      if (networkRequest.method() !== 'GET') observedBodies.push(networkRequest.postData() || '')
+    })
+  }
+
+  const ownerSession = await registerLoginAndCreateVault(owner, 'e2egroupowner')
+  await registerLoginAndCreateVault(member, 'e2egroupmember')
+
+  // Membership can only be granted to a known direct contact.
+  await selectConversation(owner, 'e2egroupmember')
+  const groupResponse = owner.waitForResponse((response) => (
+    response.url().endsWith('/api/v1/chats/groups') && response.request().method() === 'POST'
+  ))
+  await owner.getByRole('button', { name: 'Create group', exact: true }).click()
+  await owner.getByPlaceholder('Name your group').fill(GROUP_NAME)
+  await owner.getByRole('button', { name: 'Create group', exact: true }).last().click()
+  const group = await (await groupResponse).json()
+
+  await expect(owner.getByRole('button', { name: 'Conversation menu' })).toBeVisible()
+  await owner.getByRole('button', { name: 'Conversation menu' }).click()
+  await owner.getByRole('button', { name: 'Add member', exact: true }).click()
+  await owner.getByPlaceholder('Exact login').fill('e2egroupmember')
+  await owner.getByRole('button', { name: 'Continue', exact: true }).click()
+  await expect(owner.getByText('Group updated')).toBeVisible()
+
+  // Sending after the membership update synchronizes the MLS group, producing
+  // an Add Commit and Welcome before the application envelope.
+  await owner.getByRole('textbox', { name: 'Message', exact: true }).fill(GROUP_MESSAGE)
+  await owner.getByRole('button', { name: 'Send message' }).click()
+  await expect(owner.getByText(GROUP_MESSAGE)).toBeVisible()
+
+  const envelopes = await (await request.get(
+    `http://127.0.0.1:8000/api/v1/e2ee/chats/${group.id}/envelopes?after=0`,
+    { headers: { Authorization: `Bearer ${ownerSession.access_token}` } },
+  )).json()
+  expect(envelopes.some((item) => item.content_type === 'commit')).toBeTruthy()
+  expect(envelopes.some((item) => item.content_type === 'welcome')).toBeTruthy()
+  expect(envelopes.some((item) => item.content_type === 'application')).toBeTruthy()
+
+  await reloadAndUnlock(member)
+  const groupConversation = member.locator('.contact-item').filter({ hasText: GROUP_NAME }).first()
+  await expect(groupConversation).toBeVisible()
+  await groupConversation.click()
+  await expect(member.getByText(GROUP_MESSAGE)).toBeVisible()
+
+  expect(observedBodies.join('\n')).not.toContain(GROUP_NAME)
+  expect(observedBodies.join('\n')).not.toContain(GROUP_MESSAGE)
+
+  await ownerContext.close()
+  await memberContext.close()
+})
 
 test('two browser devices keep messages, files, vault and post-removal epochs opaque', async ({ browser, request }) => {
   const aliceContext = await browser.newContext()
