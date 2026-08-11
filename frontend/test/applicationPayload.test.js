@@ -275,7 +275,8 @@ test('receipt schema rejects wrong types and extra fields', () => {
 
 test('attachment schema rejects missing, extra, mistyped and oversized descriptor fields', () => {
   const payload = (descriptor) => ({ ...baseMessage(), type: 'attachment', body: { attachment_descriptor: descriptor } })
-  const { sha256, ...missing } = attachmentDescriptor()
+  const missing = attachmentDescriptor()
+  delete missing.sha256
   assert.throws(() => validateApplicationPayload(payload(missing)), /required/)
   assert.throws(() => validateApplicationPayload(payload(attachmentDescriptor({ extension: 'png' }))), /Unknown/)
   assert.throws(() => validateApplicationPayload(payload(attachmentDescriptor({ plaintext_size: '10' }))), /plaintext_size/)
