@@ -359,6 +359,65 @@ class E2eeDeliveryApiTests(unittest.TestCase):
         self.assertFalse(any(item["content_type"] == "welcome" for item in alice_inbox))
         self.assertNotEqual(alice_device, bob_device)
 
+    def test_group_lifecycle_routes_commit_welcome_and_application_by_epoch(self) -> None:
+        owner, owner_device = self.register_and_login("group-owner")
+        member, member_device = self.register_and_login("group-member")
+        invitee, invitee_device = self.register_and_login("group-invitee")
+        self.publish_identity(owner, 21)
+        self.publish_identity(member, 22)
+        self.publish_identity(invitee, 23)
+        group = self.client.post(
+            "/api/v1/chats/groups",
+            headers=self.headers(owner),
+            json={"member_logins": ["group-member", "group-invitee"]},
+        )
+        self.assertEqual(group.status_code, 201, group.text)
+        chat_id = group.json()["id"]
+
+        commit = self.client.post(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes",
+            headers=self.headers(owner),
+            json={
+                "protocol_version": 1, "epoch": 1, "content_type": "commit",
+                "payload": self.encoded(b"opaque-add-commit"),
+            },
+        )
+        welcome = self.client.post(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes",
+            headers=self.headers(owner),
+            json={
+                "protocol_version": 1, "epoch": 1, "content_type": "welcome",
+                "payload": self.encoded(b"opaque-group-welcome"),
+                "recipient_device_id": invitee_device,
+            },
+        )
+        application = self.client.post(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes",
+            headers=self.headers(member),
+            json={
+                "protocol_version": 1, "epoch": 1, "content_type": "application",
+                "payload": self.encoded(b"opaque-group-application"),
+            },
+        )
+        self.assertEqual(commit.status_code, 201, commit.text)
+        self.assertEqual(welcome.status_code, 201, welcome.text)
+        self.assertEqual(application.status_code, 201, application.text)
+
+        owner_inbox = self.client.get(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes", headers=self.headers(owner)
+        ).json()
+        member_inbox = self.client.get(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes", headers=self.headers(member)
+        ).json()
+        invitee_inbox = self.client.get(
+            f"/api/v1/e2ee/chats/{chat_id}/envelopes", headers=self.headers(invitee)
+        ).json()
+        self.assertEqual([item["epoch"] for item in owner_inbox], [1, 1])
+        self.assertEqual([item["content_type"] for item in member_inbox], ["commit", "application"])
+        self.assertEqual([item["content_type"] for item in invitee_inbox], ["commit", "welcome", "application"])
+        self.assertEqual(welcome.json()["recipient_device_id"], invitee_device)
+        self.assertNotEqual(owner_device, member_device)
+
     def test_schema_has_no_plaintext_messages_receipts_or_group_names(self) -> None:
         with sqlite3.connect(self.database_path) as connection:
             tables = {
