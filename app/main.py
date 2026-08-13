@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 
 from .core.config import Settings
+from .core.proxy_headers import TrustedProxyHeadersMiddleware
 from .db import create_database_engine, create_session_factory
 from .routers import auth, chats, e2ee, media, realtime, users
 from .services.realtime import ConnectionManager
@@ -67,6 +68,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         StaticFiles(directory=app_settings.upload_dir),
         name="uploads",
     )
+    if app_settings.trusted_proxy_cidrs:
+        application.add_middleware(
+            TrustedProxyHeadersMiddleware,
+            trusted_proxy_cidrs=app_settings.trusted_proxy_cidrs,
+        )
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(app_settings.cors_origins),

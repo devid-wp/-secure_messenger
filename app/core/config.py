@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 import os
+from ipaddress import ip_network
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SQLITE_PATH = PROJECT_ROOT / "secure_messenger.db"
 DEFAULT_UPLOAD_DIR = PROJECT_ROOT / "uploads"
 DEFAULT_MEDIA_DIR = PROJECT_ROOT / "media"
+INSECURE_PRODUCTION_VALUES = {
+    "",
+    "change-me",
+    "local-development-only",
+    "local-development-only-change-me",
+    "secure-messenger",
+}
 
 
 def _default_database_url() -> str:
@@ -37,6 +46,7 @@ class Settings:
     s3_bucket: str | None = None
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
+    trusted_proxy_cidrs: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -77,11 +87,18 @@ class Settings:
             s3_bucket=os.environ.get("S3_BUCKET") or None,
             s3_access_key_id=os.environ.get("S3_ACCESS_KEY_ID") or None,
             s3_secret_access_key=os.environ.get("S3_SECRET_ACCESS_KEY") or None,
+            trusted_proxy_cidrs=tuple(
+                value.strip()
+                for value in os.environ.get("TRUSTED_PROXY_CIDRS", "").split(",")
+                if value.strip()
+            ),
         )
         settings.validate()
         return settings
 
     def validate(self) -> None:
+        if self.environment not in {"development", "test", "production"}:
+            raise RuntimeError("APP_ENV must be development, test, or production")
         if self.environment == "production" and not self.database_url.startswith(
             ("postgresql+psycopg://", "postgresql+psycopg_async://")
         ):
@@ -90,12 +107,16 @@ class Settings:
             )
         if self.environment == "production" and not self.redis_url:
             raise RuntimeError("APP_ENV=production requires REDIS_URL")
+        if self.environment == "production":
+            self._validate_production_security()
         if self.session_ttl_seconds < 300:
             raise RuntimeError("SESSION_TTL_SECONDS must be at least 300")
         if self.refresh_ttl_seconds < self.session_ttl_seconds:
             raise RuntimeError("REFRESH_TTL_SECONDS must not be shorter than access sessions")
         if self.media_storage_backend not in {"local", "s3"}:
             raise RuntimeError("MEDIA_STORAGE_BACKEND must be local or s3")
+        if self.environment == "production" and self.media_storage_backend != "s3":
+            raise RuntimeError("APP_ENV=production requires MEDIA_STORAGE_BACKEND=s3")
         if self.media_storage_backend == "s3" and not all(
             (
                 self.s3_endpoint_url,
@@ -107,6 +128,46 @@ class Settings:
             raise RuntimeError(
                 "S3 media storage requires endpoint, bucket, access key, and secret"
             )
+
+    def _validate_production_security(self) -> None:
+        if not self.cors_origins:
+            raise RuntimeError("APP_ENV=production requires explicit CORS_ORIGINS")
+        for origin in self.cors_origins:
+            parsed = urlsplit(origin)
+            if (
+                parsed.scheme != "https"
+                or not parsed.netloc
+                or parsed.path not in {"", "/"}
+                or parsed.query
+                or parsed.fragment
+                or "*" in origin
+            ):
+                raise RuntimeError(
+                    "Production CORS_ORIGINS must contain explicit HTTPS origins only"
+                )
+        if not self.trusted_proxy_cidrs:
+            raise RuntimeError("APP_ENV=production requires TRUSTED_PROXY_CIDRS")
+        try:
+            proxy_networks = tuple(ip_network(value, strict=False) for value in self.trusted_proxy_cidrs)
+        except ValueError as error:
+            raise RuntimeError("TRUSTED_PROXY_CIDRS must contain valid CIDR networks") from error
+        if any(network.prefixlen == 0 for network in proxy_networks):
+            raise RuntimeError("TRUSTED_PROXY_CIDRS must not trust the entire internet")
+        production_secrets = (
+            self.database_url,
+            self.redis_url or "",
+            self.s3_access_key_id or "",
+            self.s3_secret_access_key or "",
+        )
+        if any(self._is_insecure_production_value(value) for value in production_secrets):
+            raise RuntimeError("Production configuration contains a development credential")
+
+    @staticmethod
+    def _is_insecure_production_value(value: str) -> bool:
+        normalized = value.strip().lower()
+        return not normalized or any(
+            marker and marker in normalized for marker in INSECURE_PRODUCTION_VALUES
+        )
 
     @property
     def sync_database_url(self) -> str:

@@ -225,6 +225,57 @@ class FoundationMigrationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             settings.validate()
 
+    def test_production_requires_https_origins_and_trusted_proxy(self) -> None:
+        settings = Settings(
+            environment="production",
+            database_url="postgresql+psycopg://user:password@db/app",
+            redis_url="redis://redis:6379/0",
+            cors_origins=("http://messenger.example",),
+            trusted_proxy_cidrs=("10.0.0.0/24",),
+        )
+        with self.assertRaisesRegex(RuntimeError, "HTTPS origins"):
+            settings.validate()
+
+        settings = Settings(
+            environment="production",
+            database_url="postgresql+psycopg://user:password@db/app",
+            redis_url="redis://redis:6379/0",
+            cors_origins=("https://messenger.example",),
+        )
+        with self.assertRaisesRegex(RuntimeError, "TRUSTED_PROXY_CIDRS"):
+            settings.validate()
+
+    def test_production_rejects_placeholder_credentials(self) -> None:
+        settings = Settings(
+            environment="production",
+            database_url="postgresql+psycopg://secure_messenger:local-development-only@db/app",
+            redis_url="redis://redis:6379/0",
+            cors_origins=("https://messenger.example",),
+            trusted_proxy_cidrs=("10.0.0.0/24",),
+            media_storage_backend="s3",
+            s3_endpoint_url="https://storage.example",
+            s3_bucket="messenger",
+            s3_access_key_id="access-key",
+            s3_secret_access_key="secret-key",
+        )
+        with self.assertRaisesRegex(RuntimeError, "development credential"):
+            settings.validate()
+
+    def test_complete_production_configuration_is_accepted(self) -> None:
+        settings = Settings(
+            environment="production",
+            database_url="postgresql+psycopg://service:strong-db-password@db/app",
+            redis_url="redis://:strong-redis-password@redis:6379/0",
+            cors_origins=("https://messenger.example",),
+            trusted_proxy_cidrs=("10.0.0.0/24",),
+            media_storage_backend="s3",
+            s3_endpoint_url="https://storage.example",
+            s3_bucket="messenger",
+            s3_access_key_id="access-key",
+            s3_secret_access_key="secret-key",
+        )
+        settings.validate()
+
 
 class VersionedApiSmokeTests(unittest.TestCase):
     def setUp(self) -> None:
