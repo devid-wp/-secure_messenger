@@ -2,26 +2,22 @@ import React from 'react'
 
 /**
  * Catches render-time errors in the chat tree and renders a fallback
- * instead of unmounting the whole app to a black screen. Reports the
- * error to the console for debugging.
+ * instead of unmounting the whole app to a black screen. Render failures can
+ * include message content in their text or component props, so neither the
+ * error nor its stack is exposed to the user or browser console.
  */
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props)
-    this.state = { hasError: false, error: null, info: null }
+    this.state = { hasError: false }
   }
 
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error }
-  }
-
-  componentDidCatch(error, info) {
-    console.error('[ErrorBoundary] render failure:', error, info)
-    this.setState({ info })
+  static getDerivedStateFromError() {
+    return { hasError: true }
   }
 
   handleReset = () => {
-    this.setState({ hasError: false, error: null, info: null })
+    this.setState({ hasError: false })
   }
 
   handleReload = () => {
@@ -31,7 +27,6 @@ class ErrorBoundary extends React.Component {
 
   render() {
     if (!this.state.hasError) return this.props.children
-    const { error, info } = this.state
     return (
       <div className="error-boundary">
         <div className="error-boundary-card">
@@ -40,12 +35,6 @@ class ErrorBoundary extends React.Component {
           <p className="error-boundary-sub">
             Произошла ошибка рендера. Попробуйте перезагрузить страницу.
           </p>
-          {error && (
-            <pre className="error-boundary-stack">
-              {String(error?.message || error)}
-              {info?.componentStack ? '\n\n' + info.componentStack : ''}
-            </pre>
-          )}
           <div className="error-boundary-actions">
             <button type="button" className="error-boundary-btn" onClick={this.handleReset}>
               Попробовать снова
