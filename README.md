@@ -59,6 +59,6 @@ python -m pytest
 ```
 
 Backend development and deployment use standard FastAPI, Alembic and pytest
-commands. The `docs/` directory is reserved for the current release
-documentation and will be populated with the deployment, security and recovery
-runbooks before release.
+commands. Read the current [installation and production runbook](docs/production.md),
+[backup/release procedure](docs/backup-and-release.md), and
+[security model](docs/security.md) before deployment.
