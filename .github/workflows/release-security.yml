@@ -1,0 +1,118 @@
+name: Release security gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - name: Reject explicitly skipped security tests
+        run: python scripts/check_no_skipped_security_tests.py
+      - name: Install hash-pinned Python dependencies
+        run: python -m pip install --require-hashes -r requirements-dev.lock
+      - name: Verify migrations on a clean database
+        run: DATABASE_URL=sqlite+aiosqlite:////tmp/secure-messenger-ci.db APP_ENV=test python -m alembic upgrade head
+      - name: Run complete backend test suite
+        id: backend_tests
+        continue-on-error: true
+        run: python -m pytest
+      - name: Audit Python production dependencies
+        id: pip_audit
+        continue-on-error: true
+        run: |
+          mkdir -p audit-results
+          python -m pip_audit -r requirements.lock --format json --output audit-results/pip-audit.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install lockfile-exact frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Audit complete npm dependency graph
+        id: npm_audit
+        continue-on-error: true
+        working-directory: frontend
+        run: npm audit --audit-level=high --json > ../audit-results/npm-audit.json
+      - name: Lint, typecheck, and test frontend
+        working-directory: frontend
+        run: |
+          npm run lint
+          npm run typecheck
+          npm test
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-wasm
+      - name: Install pinned audit and WASM tools
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo install wasm-bindgen-cli --version 0.2.126 --locked
+      - name: Verify locked Rust dependency graph
+        working-directory: frontend/src-wasm
+        run: |
+          cargo fmt --check
+          cargo check --locked --target wasm32-unknown-unknown
+          cargo test --locked
+      - name: Audit Rust dependency graph
+        id: cargo_audit
+        continue-on-error: true
+        working-directory: frontend/src-wasm
+        run: cargo audit --json > ../../audit-results/cargo-audit.json
+
+      - name: Build browser MLS application
+        working-directory: frontend
+        run: npm run build
+      - name: Build production container images
+        run: |
+          docker build --tag secure-messenger-backend:ci .
+          docker build --tag secure-messenger-frontend:ci frontend
+      - name: Install Chromium and Firefox
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium firefox
+      - name: Run E2EE in Chromium and Firefox
+        working-directory: frontend
+        run: npm run test:e2e
+
+      - name: Verify dependency lockfiles stayed unchanged
+        run: |
+          git diff --exit-code -- \
+            requirements.lock \
+            requirements-dev.lock \
+            frontend/package-lock.json \
+            frontend/src-wasm/Cargo.lock
+
+      - name: Preserve dependency audit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit-results
+          path: audit-results/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Enforce dependency audit policy
+        if: steps.backend_tests.outcome == 'failure' || steps.pip_audit.outcome == 'failure' || steps.npm_audit.outcome == 'failure' || steps.cargo_audit.outcome == 'failure'
+        run: |
+          echo "A backend test or dependency audit failed. Fix the failure, or record an approved audit exception in the release documentation."
+          exit 1

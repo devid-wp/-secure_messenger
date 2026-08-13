@@ -1,7 +1,13 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Base64Bytes, BaseModel, ConfigDict, Field
+from pydantic import Base64Bytes, BaseModel as PydanticBaseModel, ConfigDict, Field
+
+
+class BaseModel(PydanticBaseModel):
+    """Fail closed on fields not declared by the API contract."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class Credentials(BaseModel):

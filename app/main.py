@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
@@ -74,6 +74,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @application.middleware("http")
+    async def browser_security_headers(request: Request, call_next):
+        """Apply defense-in-depth headers to API responses too.
+
+        The frontend ingress owns the stricter document CSP and HTTPS redirect;
+        these headers keep direct API/error responses non-embeddable and quiet.
+        """
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        )
+        if app_settings.environment == "production":
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=63072000; includeSubDomains; preload"
+            )
+        return response
 
     api_v1 = APIRouter(prefix=API_V1_PREFIX)
     api_v1.include_router(auth.router)

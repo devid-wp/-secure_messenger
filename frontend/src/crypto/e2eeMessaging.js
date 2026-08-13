@@ -4,9 +4,10 @@ import {
   removeMlsDevices, updateMlsGroup,
 } from './mlsRuntimeBridge'
 import { synchronizeDeviceMls } from './e2eeBootstrap'
-import { assertAuthenticatedPayloadSender, decodeApplicationPayload, encodeApplicationPayload } from './applicationPayload'
+import { assertAuthenticatedPayloadSender, decodeApplicationPayload, encodeApplicationPayload, preflightApplicationPayload as preflightPayload } from './applicationPayload'
 import { classifyMlsError, isExpectedMlsError, MLS_ERROR_CODES, MlsEnvelopeError } from './mlsErrors'
 import { confirmRetryableEnvelope, getRetryableEnvelope } from './outgoingEnvelopeCache'
+import { assertMlsSendingAllowed, blockMlsSending, explicitMlsResync, mlsSendingBlocked } from './mlsSendPolicy'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const deviceOwners = new Map()
@@ -20,11 +21,12 @@ function authenticatedSender(envelope) {
   return owner
 }
 
-function reportMlsIssue(error, envelope) {
+function reportMlsIssue(error, envelope, chatId) {
   const classified = classifyMlsError(error)
+  if (!isExpectedMlsError(classified)) blockMlsSending(chatId, classified)
   if (typeof globalThis.dispatchEvent === 'function' && typeof globalThis.CustomEvent === 'function') {
     globalThis.dispatchEvent(new CustomEvent('secure-messenger:mls-error', {
-      detail: { code: classified.code, envelopeId: envelope?.id ?? null, epoch: envelope?.epoch ?? null },
+      detail: { code: classified.code, chatId, blocked: mlsSendingBlocked(chatId), envelopeId: envelope?.id ?? null, epoch: envelope?.epoch ?? null },
     }))
   }
   return classified
@@ -94,9 +96,9 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
       if (envelope.content_type === 'welcome') await joinMlsGroup(wire)
       else await processMls(chatId, wire)
     } catch (error) {
-      const classified = reportMlsIssue(error, envelope)
+      const classified = reportMlsIssue(error, envelope, chatId)
       if (classified.code === MLS_ERROR_CODES.MISSING_COMMIT) deferred.push(envelope)
-      else if (!isExpectedMlsError(classified)) continue
+      else if (!isExpectedMlsError(classified)) throw classified
     }
   }
   for (const envelope of deferred) {
@@ -105,8 +107,8 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
       if (envelope.content_type === 'welcome') await joinMlsGroup(wire)
       else await processMls(chatId, wire)
     } catch (error) {
-      const classified = reportMlsIssue(error, envelope)
-      if (!isExpectedMlsError(classified)) continue
+      const classified = reportMlsIssue(error, envelope, chatId)
+      if (!isExpectedMlsError(classified)) throw classified
     }
   }
 
@@ -119,6 +121,15 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
     if (!String(error).includes('already exists')) throw error
   }
   const currentMembers = new Set(await listMlsMembers(chatId))
+  const expectedDevices = new Set(devices.map((device) => device.device_id))
+  const removedDevices = [...currentMembers].filter((memberDeviceId) => (
+    memberDeviceId !== deviceId && !expectedDevices.has(memberDeviceId)
+  ))
+  if (removedDevices.length) {
+    const removed = await removeMlsDevices(chatId, removedDevices)
+    await publishEnvelope(token, chatId, 'commit', removed.epoch, removed.commit)
+    for (const removedDeviceId of removedDevices) currentMembers.delete(removedDeviceId)
+  }
   const missingDevices = devices.filter((device) => device.device_id !== deviceId && !currentMembers.has(device.device_id))
   if (!missingDevices.length) return
   const packages = []
@@ -135,6 +146,8 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
 }
 
 export async function encryptAndPublish(token, chatId, message) {
+  // Check the fail-closed state before serializing application plaintext.
+  assertMlsSendingAllowed(chatId)
   const senderDeviceId = localDevicesByChat.get(chatId)
   if (!senderDeviceId) throw new Error('MLS group must be synchronized before publishing')
   if (!message?.client_id) throw new Error('Encrypted message requires a client identifier')
@@ -147,6 +160,10 @@ export async function encryptAndPublish(token, chatId, message) {
   const envelope = await publishEnvelope(token, chatId, 'application', encrypted.epoch, encrypted.ciphertext)
   confirmRetryableEnvelope(wireKey)
   return envelope
+}
+
+export function preflightApplicationPayload(message, senderDeviceId) {
+  return preflightPayload(message, senderDeviceId)
 }
 
 export async function decryptEnvelope(chatId, envelope) {
@@ -166,8 +183,16 @@ export async function decryptEnvelope(chatId, envelope) {
     value.sender = sender
     return value
   } catch (error) {
-    throw reportMlsIssue(error, envelope)
+    throw reportMlsIssue(error, envelope, chatId)
   }
+}
+
+export function isMlsSendingBlocked(chatId) {
+  return mlsSendingBlocked(chatId)
+}
+
+export function resynchronizeMlsGroup(token, deviceId, chatId) {
+  return explicitMlsResync(chatId, () => synchronizeMlsGroup(token, deviceId, chatId))
 }
 
 export async function removeRevokedDevice(token, chatIds, deviceId) {

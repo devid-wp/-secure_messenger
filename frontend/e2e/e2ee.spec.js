@@ -3,8 +3,12 @@ import { Buffer } from 'node:buffer'
 
 const ACCOUNT_PASSWORD = 'account-password-123'
 const VAULT_PASSWORD = 'local-vault-password-123'
+const CHANGED_VAULT_PASSWORD = 'changed-local-vault-password-456'
 const MESSAGE = 'E2E_SENTINEL_8c36f2b4_message'
+const OFFLINE_MESSAGE = 'E2E_SENTINEL_54e2c00a_offline_reconnect'
 const FILE_PLAINTEXT = 'E2E_SENTINEL_71db60e9_file'
+const GROUP_NAME = 'E2E_SENTINEL_a934e8f1_group_name'
+const GROUP_MESSAGE = 'E2E_SENTINEL_f7c4102a_group_message'
 
 async function registerLoginAndCreateVault(page, login) {
   await page.goto('/')
@@ -43,6 +47,66 @@ async function selectConversation(page, username) {
   await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled()
 }
 
+test('group membership delivers encrypted metadata and application messages', async ({ browser, request }) => {
+  const ownerContext = await browser.newContext()
+  const memberContext = await browser.newContext()
+  const owner = await ownerContext.newPage()
+  const member = await memberContext.newPage()
+  const observedBodies = []
+
+  for (const page of [owner, member]) {
+    page.on('request', (networkRequest) => {
+      if (networkRequest.method() !== 'GET') observedBodies.push(networkRequest.postData() || '')
+    })
+  }
+
+  const ownerSession = await registerLoginAndCreateVault(owner, 'e2egroupowner')
+  await registerLoginAndCreateVault(member, 'e2egroupmember')
+
+  // Membership can only be granted to a known direct contact.
+  await selectConversation(owner, 'e2egroupmember')
+  const groupResponse = owner.waitForResponse((response) => (
+    response.url().endsWith('/api/v1/chats/groups') && response.request().method() === 'POST'
+  ))
+  await owner.getByRole('button', { name: 'Create group', exact: true }).click()
+  await owner.getByPlaceholder('Name your group').fill(GROUP_NAME)
+  await owner.getByRole('button', { name: 'Create group', exact: true }).last().click()
+  const group = await (await groupResponse).json()
+
+  await expect(owner.getByRole('button', { name: 'Conversation menu' })).toBeVisible()
+  await owner.getByRole('button', { name: 'Conversation menu' }).click()
+  await owner.getByRole('button', { name: 'Add member', exact: true }).click()
+  await owner.getByPlaceholder('Exact login').fill('e2egroupmember')
+  await owner.getByRole('button', { name: 'Continue', exact: true }).click()
+  await expect(owner.getByText('Group updated')).toBeVisible()
+
+  // Sending after the membership update synchronizes the MLS group, producing
+  // an Add Commit and Welcome before the application envelope.
+  await owner.getByRole('textbox', { name: 'Message', exact: true }).fill(GROUP_MESSAGE)
+  await owner.getByRole('button', { name: 'Send message' }).click()
+  await expect(owner.getByText(GROUP_MESSAGE)).toBeVisible()
+
+  const envelopes = await (await request.get(
+    `http://127.0.0.1:8000/api/v1/e2ee/chats/${group.id}/envelopes?after=0`,
+    { headers: { Authorization: `Bearer ${ownerSession.access_token}` } },
+  )).json()
+  expect(envelopes.some((item) => item.content_type === 'commit')).toBeTruthy()
+  expect(envelopes.some((item) => item.content_type === 'welcome')).toBeTruthy()
+  expect(envelopes.some((item) => item.content_type === 'application')).toBeTruthy()
+
+  await reloadAndUnlock(member)
+  const groupConversation = member.locator('.contact-item').filter({ hasText: GROUP_NAME }).first()
+  await expect(groupConversation).toBeVisible()
+  await groupConversation.click()
+  await expect(member.getByText(GROUP_MESSAGE)).toBeVisible()
+
+  expect(observedBodies.join('\n')).not.toContain(GROUP_NAME)
+  expect(observedBodies.join('\n')).not.toContain(GROUP_MESSAGE)
+
+  await ownerContext.close()
+  await memberContext.close()
+})
+
 test('two browser devices keep messages, files, vault and post-removal epochs opaque', async ({ browser, request }) => {
   const aliceContext = await browser.newContext()
   const bobContext = await browser.newContext()
@@ -68,7 +132,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   })
 
   const aliceSession = await registerLoginAndCreateVault(alice, 'e2ealice')
-  await registerLoginAndCreateVault(bob, 'e2ebob')
+  const bobSession = await registerLoginAndCreateVault(bob, 'e2ebob')
 
   await selectConversation(alice, 'e2ebob')
   await reloadAndUnlock(bob)
@@ -82,9 +146,34 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await reloadAndUnlock(bob)
   await expect(bob.getByText(MESSAGE)).toBeVisible()
 
-  await alice.locator('input[type="file"].visually-hidden').setInputFiles({
+  // An application composed while disconnected must remain in the encrypted
+  // outbox. Reconnecting retries MLS synchronization and encryption; there is
+  // no plaintext transport fallback while the API and WebSocket are offline.
+  await aliceContext.setOffline(true)
+  await expect(alice.getByText('Connection interrupted. Queued messages will retry automatically.')).toBeVisible()
+  const applicationBeforeOffline = newestApplication?.id
+  await alice.getByRole('textbox', { name: 'Message', exact: true }).fill(OFFLINE_MESSAGE)
+  await alice.getByRole('button', { name: 'Send message' }).click()
+  await expect(alice.getByText(OFFLINE_MESSAGE)).toBeVisible()
+  expect(newestApplication?.id).toBe(applicationBeforeOffline)
+
+  await aliceContext.setOffline(false)
+  await expect.poll(() => newestApplication?.id, { timeout: 45_000 }).not.toBe(applicationBeforeOffline)
+  await expect(alice.getByText('Connection interrupted. Queued messages will retry automatically.')).toHaveCount(0)
+  await reloadAndUnlock(bob)
+  await expect(bob.getByText(OFFLINE_MESSAGE)).toBeVisible()
+
+  await alice.route('**/api/v1/media/attachments', (route) => route.abort('connectionreset'), { times: 1 })
+  const attachmentFixture = {
     name: 'secret.txt', mimeType: 'text/plain', buffer: Buffer.from(FILE_PLAINTEXT),
-  })
+  }
+  await alice.locator('input[type="file"].visually-hidden').setInputFiles(attachmentFixture)
+  await expect(alice.locator('.attachment-progress')).toHaveCount(0)
+  expect(uploadedMedia, 'an interrupted upload must not publish attachment metadata').toBeNull()
+
+  // Selecting the same file again is an explicit retry. The input is reset
+  // after every selection, so browsers must dispatch this second change.
+  await alice.locator('input[type="file"].visually-hidden').setInputFiles(attachmentFixture)
   await expect.poll(() => uploadedMedia).not.toBeNull()
   await reloadAndUnlock(bob)
   const download = bob.getByText('Download decrypted file')
@@ -106,6 +195,28 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await alice.getByPlaceholder('Local passphrase').fill(VAULT_PASSWORD)
   await alice.getByRole('button', { name: 'Unlock' }).click()
   await expect(alice.getByText(MESSAGE)).toBeVisible()
+
+  await alice.getByRole('button', { name: 'Change passphrase' }).click()
+  await alice.getByPlaceholder('Current passphrase').fill(VAULT_PASSWORD)
+  await alice.getByPlaceholder('New passphrase').fill(CHANGED_VAULT_PASSWORD)
+  await alice.getByPlaceholder('Confirm new passphrase').fill(CHANGED_VAULT_PASSWORD)
+  await alice.getByRole('button', { name: 'Save passphrase' }).click()
+  await expect(alice.getByRole('heading', { name: 'Change local passphrase' })).toHaveCount(0)
+  await alice.getByRole('button', { name: 'Lock' }).click()
+  await alice.getByPlaceholder('Local passphrase').fill(VAULT_PASSWORD)
+  await alice.getByRole('button', { name: 'Unlock' }).click()
+  await expect(alice.getByRole('alert')).toContainText('local vault could not be opened')
+  await alice.getByPlaceholder('Local passphrase').fill(CHANGED_VAULT_PASSWORD)
+  await alice.getByRole('button', { name: 'Unlock' }).click()
+  await expect(alice.getByText(MESSAGE)).toBeVisible()
+
+  // Restore the fixture passphrase so subsequent reload checks continue to
+  // exercise the shared reloadAndUnlock helper.
+  await alice.getByRole('button', { name: 'Change passphrase' }).click()
+  await alice.getByPlaceholder('Current passphrase').fill(CHANGED_VAULT_PASSWORD)
+  await alice.getByPlaceholder('New passphrase').fill(VAULT_PASSWORD)
+  await alice.getByPlaceholder('Confirm new passphrase').fill(VAULT_PASSWORD)
+  await alice.getByRole('button', { name: 'Save passphrase' }).click()
 
   const lostSession = await (async () => {
     await aliceLost.goto('/')
@@ -129,6 +240,15 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
     lostWelcome = envelopes.find((item) => item.content_type === 'welcome' && item.recipient_device_id === lostSession.device_id) || null
     return Boolean(lostWelcome)
   }).toBeTruthy()
+  const membershipEnvelopes = await (await request.get(
+    `http://127.0.0.1:8000/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`,
+    { headers: { Authorization: `Bearer ${aliceSession.access_token}` } },
+  )).json()
+  const addCommit = membershipEnvelopes.find((item) => (
+    item.content_type === 'commit' && item.epoch === lostWelcome.epoch
+  ))
+  expect(addCommit, 'adding the independent lost-device profile publishes an Add Commit').toBeTruthy()
+  expect(addCommit.epoch).toBeGreaterThan(newestApplication.epoch)
   await reloadAndUnlock(aliceLost)
   const lostJoined = await aliceLost.evaluate(async ({ chatId, deviceId, payload }) => {
     const bridge = await import('/src/crypto/mlsRuntimeBridge.js')
@@ -142,6 +262,20 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
     return members.includes(deviceId)
   }, { chatId: newestApplication.chat_id, deviceId: lostSession.device_id, payload: lostWelcome.payload })
   expect(lostJoined).toBeTruthy()
+
+  await reloadAndUnlock(bob)
+  await expect(bob.getByText(MESSAGE)).toBeVisible()
+  await expect(bob.getByText('Contact credential or device set changed')).toBeVisible()
+  const updateEpoch = await bob.evaluate(async ({ chatId, token }) => {
+    const bridge = await import('/src/crypto/mlsRuntimeBridge.js')
+    const messaging = await import('/src/crypto/e2eeMessaging.js')
+    const update = await bridge.updateMlsGroup(chatId)
+    const envelope = await messaging.publishEnvelope(token, chatId, 'commit', update.epoch, update.commit)
+    return envelope.epoch
+  }, { chatId: newestApplication.chat_id, token: bobSession.access_token })
+  expect(updateEpoch, 'Update Commit advances the epoch in an independent profile').toBe(addCommit.epoch + 1)
+  await reloadAndUnlock(alice)
+  await expect(alice.getByText(MESSAGE)).toBeVisible()
   await aliceLostContext.setOffline(true)
 
   await alice.getByRole('button', { name: 'Main menu' }).click()
@@ -152,11 +286,22 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await expect(alice.getByText(/MLS Remove Commit applied in 1 conversation/)).toBeVisible()
   await alice.getByRole('dialog', { name: 'Trusted devices' }).getByRole('button', { name: 'Close' }).click()
 
+  const afterRevokeEnvelopes = await (await request.get(
+    `http://127.0.0.1:8000/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`,
+    { headers: { Authorization: `Bearer ${aliceSession.access_token}` } },
+  )).json()
+  const removeCommit = afterRevokeEnvelopes
+    .filter((item) => item.content_type === 'commit' && item.epoch > updateEpoch)
+    .sort((left, right) => right.epoch - left.epoch)[0]
+  expect(removeCommit, 'revoking the offline profile publishes a Remove Commit').toBeTruthy()
+  expect(removeCommit.epoch).toBe(updateEpoch + 1)
+
   const afterRemoval = 'E2E_SENTINEL_after_device_removal'
   const previousApplicationId = newestApplication?.id
   await alice.getByRole('textbox', { name: 'Message', exact: true }).fill(afterRemoval)
   await alice.getByRole('button', { name: 'Send message' }).click()
   await expect.poll(() => newestApplication?.id).not.toBe(previousApplicationId)
+  expect(newestApplication.epoch).toBe(removeCommit.epoch)
   const rejected = await aliceLost.evaluate(async ({ chatId, payload }) => {
     try {
       const bridge = await import('/src/crypto/mlsRuntimeBridge.js')
@@ -169,8 +314,39 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   expect(lostSession.device_id).not.toBe(aliceSession.device_id)
 
   expect(observedBodies.join('\n')).not.toContain(MESSAGE)
+  expect(observedBodies.join('\n')).not.toContain(OFFLINE_MESSAGE)
   expect(observedBodies.join('\n')).not.toContain(FILE_PLAINTEXT)
   expect(observedBodies.join('\n')).not.toContain(afterRemoval)
+
+  // Corrupt the authenticated state ciphertext at rest. Unlock must fail
+  // closed and the locked UI must not render any previously decrypted text.
+  await alice.getByRole('button', { name: 'Lock' }).click()
+  await alice.evaluate(async (deviceId) => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('secure-messenger-mls-v1', 1)
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction('state', 'readwrite')
+      const store = transaction.objectStore('state')
+      const request = store.get(deviceId)
+      request.onsuccess = () => {
+        const record = request.result
+        const corrupted = new Uint8Array(record.state_ciphertext.slice(0))
+        corrupted[corrupted.length - 1] ^= 0x01
+        record.state_ciphertext = corrupted.buffer
+        store.put(record, deviceId)
+      }
+      transaction.oncomplete = resolve
+      transaction.onerror = () => reject(transaction.error)
+    })
+    database.close()
+  }, aliceSession.device_id)
+  await alice.getByPlaceholder('Local passphrase').fill(VAULT_PASSWORD)
+  await alice.getByRole('button', { name: 'Unlock' }).click()
+  await expect(alice.getByRole('alert')).toContainText('local vault could not be opened')
+  await expect(alice.getByText(MESSAGE)).toHaveCount(0)
 
   await aliceContext.close()
   await bobContext.close()

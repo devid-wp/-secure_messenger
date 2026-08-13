@@ -272,6 +272,7 @@ const handlers = {
     const value = parse(client.create_group(String(chatId))); await persist(); return value
   },
   async members({ chatId }) { return parse(client.group_members(String(chatId))) },
+  async credentials({ chatId }) { return parse(client.group_credentials(String(chatId))) },
   async addMembers({ chatId, keyPackages }) {
     requireUnlocked()
     const value = parse(client.add_members(String(chatId), JSON.stringify(keyPackages)))

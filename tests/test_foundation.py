@@ -8,6 +8,7 @@ from unittest import mock
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, create_mock_engine
 
 from app.core.config import Settings
@@ -122,7 +123,7 @@ class FoundationMigrationTests(unittest.TestCase):
                 connection.execute(
                     "SELECT version_num FROM alembic_version"
                 ).fetchone()[0],
-                "20260805_20",
+                "20260807_22",
             )
             self.assertEqual(
                 connection.execute("PRAGMA foreign_key_check").fetchall(),
@@ -149,6 +150,20 @@ class FoundationMigrationTests(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
                 ).fetchone()
             )
+            tables = {
+                row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            chat_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(chats)")
+            }
+            media_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(media_objects)")
+            }
+            self.assertTrue({"messages", "message_receipts"}.isdisjoint(tables))
+            self.assertTrue({"name", "next_message_seq"}.isdisjoint(chat_columns))
+            self.assertTrue({"key_envelope", "nonce", "cipher"}.isdisjoint(media_columns))
             placeholders = connection.execute(
                 """
                 SELECT login
@@ -360,6 +375,39 @@ class VersionedApiSmokeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.client.get("/api/v1/users", headers=headers).status_code,
+            401,
+        )
+
+    def test_revoking_another_device_closes_its_websocket_and_session(self) -> None:
+        owner_token = self._register_and_login("device-owner")
+        second_login = self.client.post(
+            "/api/v1/auth/login",
+            json={
+                "login": "device-owner",
+                "password": "password-123",
+                "device_name": "Revoked browser",
+            },
+        )
+        self.assertEqual(second_login.status_code, 200, second_login.text)
+        revoked_token = second_login.json()["token"]
+        revoked_device_id = second_login.json()["device_id"]
+
+        with self.client.websocket_connect(
+            "/api/v1/realtime/ws", subprotocols=[f"bearer.{revoked_token}"]
+        ) as websocket:
+            revoked = self.client.delete(
+                f"/api/v1/auth/devices/{revoked_device_id}",
+                headers={"Authorization": f"Bearer {owner_token}"},
+            )
+            self.assertEqual(revoked.status_code, 204, revoked.text)
+            with self.assertRaises(WebSocketDisconnect) as closed:
+                websocket.receive_text()
+            self.assertEqual(closed.exception.code, 4003)
+
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/users", headers={"Authorization": f"Bearer {revoked_token}"}
+            ).status_code,
             401,
         )
 

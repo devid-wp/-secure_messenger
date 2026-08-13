@@ -19,11 +19,14 @@ import {
   decryptEnvelope,
   e2eeAvailable,
   encryptAndPublish,
+  preflightApplicationPayload,
   removeRevokedDevice,
   removeMlsMembers,
   rotateMlsEpoch,
+  resynchronizeMlsGroup,
   synchronizeMlsGroup,
 } from '../crypto/e2eeMessaging'
+import { listMlsCredentials } from '../crypto/mlsRuntimeBridge'
 import { decryptAttachment, encryptAttachment, MAX_ATTACHMENT_BYTES } from '../crypto/attachmentCrypto'
 import { createSafetyCode } from '../crypto/safetyCode'
 import { applyMessageLifecycle } from '../crypto/messageLifecycle'
@@ -219,10 +222,14 @@ function ChatApp({ token, login, deviceId, onLogout }) {
   const [securityEvents, setSecurityEvents] = useState([])
   const [inputText, setInputText] = useState('')
   const [error, setError] = useState('')
+  const [mlsBlockedChats, setMlsBlockedChats] = useState(() => new Set())
 
   useEffect(() => {
     const handleMlsError = (event) => {
       const code = event.detail?.code
+      if (event.detail?.blocked && event.detail?.chatId !== undefined) {
+        setMlsBlockedChats((current) => new Set(current).add(String(event.detail.chatId)))
+      }
       if (code && ![MLS_ERROR_CODES.DUPLICATE, MLS_ERROR_CODES.STALE_EPOCH].includes(code)) {
         setError(`Encrypted envelope rejected (${code}).`)
       }
@@ -871,6 +878,12 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       reply_to_sender: replyingTo?.sender ?? null,
       reply_to_content: replyingTo?.content ?? null,
     }
+    try {
+      preflightApplicationPayload(pendingMessage, deviceId)
+    } catch (validationError) {
+      setError(validationError.message || 'Message exceeds encrypted payload limits')
+      return
+    }
     outboxRef.current = [...outboxRef.current, pendingMessage]
     writeOutbox(login, outboxRef.current)
     setMessages((previous) => [...previous, pendingMessage])
@@ -919,6 +932,22 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     } catch (retryError) {
       setMessages((previous) => replacePendingStatus(previous, message.client_id, 'failed'))
       setError(retryError.message || 'Encrypted retry failed')
+    }
+  }
+
+  const resyncSelectedChat = async () => {
+    if (selectedChatId === null) return
+    try {
+      await resynchronizeMlsGroup(token, deviceId, selectedChatId)
+      setMlsBlockedChats((current) => {
+        const next = new Set(current)
+        next.delete(String(selectedChatId))
+        return next
+      })
+      setError('MLS resync completed. Encrypted sending is enabled.')
+      setHistoryRefresh((value) => value + 1)
+    } catch (resyncError) {
+      setError(resyncError.message || 'MLS resync failed; encrypted sending remains blocked')
     }
   }
 
@@ -1212,11 +1241,13 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     if (!contactLogin) return
     setChatMenuOpen(false); setVerificationBusy(true)
     try {
+      await synchronizeMlsGroup(token, deviceId, selectedChatId)
       const responses = await Promise.all([login, contactLogin].map((name) => fetch(
         `${API_URL}/api/v1/e2ee/users/${encodeURIComponent(name)}/identities`, { headers: authHeaders },
       )))
       if (responses.some((response) => !response.ok)) throw new Error('Could not load device identities')
-      const code = await createSafetyCode(await Promise.all(responses.map((response) => response.json())))
+      const identities = await Promise.all(responses.map((response) => response.json()))
+      const code = await createSafetyCode(identities, await listMlsCredentials(selectedChatId))
       setVerification({ contactLogin, code: code.display, qr: await QRCode.toDataURL(code.qrPayload, { errorCorrectionLevel: 'M', margin: 1, width: 240 }) })
     } catch (caught) { setError(caught.message) } finally { setVerificationBusy(false) }
   }
@@ -1506,6 +1537,12 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       reply_to_sender: null,
       reply_to_content: null,
     }
+    try {
+      preflightApplicationPayload(pendingMessage, deviceId)
+    } catch (validationError) {
+      setError(validationError.message || 'Sticker exceeds encrypted payload limits')
+      return
+    }
     outboxRef.current = [...outboxRef.current, pendingMessage]
     writeOutbox(login, outboxRef.current)
     setMessages((previous) => [...previous, pendingMessage])
@@ -1635,6 +1672,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
         timestamp: new Date().toISOString(),
         status: 'sending',
       }
+      preflightApplicationPayload(pendingMessage, deviceId)
       outboxRef.current = [...outboxRef.current, pendingMessage]
       writeOutbox(login, outboxRef.current)
       setMessages((previous) => [...previous, pendingMessage])
@@ -1800,12 +1838,22 @@ function ChatApp({ token, login, deviceId, onLogout }) {
             <div className="security-warning" role="alert" key={securityEvent.id}>
               <Icon name="shield" />
               <span>
-                <strong>Contact safety fingerprint changed</strong>
-                <small>Device {securityEvent.device_id?.slice(0, 8) || 'unknown'} · verify the safety code before trusting new messages.</small>
+                <strong>Contact credential or device set changed</strong>
+                <small>Device {securityEvent.device_id?.slice(0, 8) || 'unknown'} · compare the new safety code before trusting new messages.</small>
               </span>
               <button type="button" onClick={() => acknowledgeSecurityEvent(securityEvent.id)}>Reviewed</button>
             </div>
           ))}
+          {mlsBlockedChats.has(String(selectedChatId)) && (
+            <div className="security-warning" role="alert">
+              <Icon name="shield" />
+              <span>
+                <strong>Encrypted sending blocked</strong>
+                <small>An ambiguous MLS error requires an explicit resync. Plaintext fallback is disabled.</small>
+              </span>
+              <button type="button" onClick={resyncSelectedChat}>Resync MLS</button>
+            </div>
+          )}
           {!wsReady && <div className="offline-banner">Connection interrupted. Queued messages will retry automatically.</div>}
           {error && <p className="error-message" role="alert">{error}<button type="button" onClick={() => setError('')} aria-label="Dismiss error">×</button></p>}
           {nextCursor && (
@@ -1913,13 +1961,13 @@ function ChatApp({ token, login, deviceId, onLogout }) {
           }}
           onAttach={() => attachmentInputRef.current?.click()}
           conversation={selectedConversation}
-          disabled={selectedChatId === null || !e2eeAvailable()}
+          disabled={selectedChatId === null || !e2eeAvailable() || mlsBlockedChats.has(String(selectedChatId))}
         />
         <input
           ref={attachmentInputRef}
           className="visually-hidden"
           type="file"
-          disabled={attachmentBusy || selectedChatId === null || !e2eeAvailable()}
+          disabled={attachmentBusy || selectedChatId === null || !e2eeAvailable() || mlsBlockedChats.has(String(selectedChatId))}
           onChange={(event) => {
             void chooseAttachment(event.target.files)
             event.target.value = ''
@@ -2066,7 +2114,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       {verification && (
         <Modal title={`Verify @${verification.contactLogin}`} onClose={() => setVerification(null)}>
           <div className="devices-panel">
-            <p>Compare this QR code or all 60 digits over an authenticated channel. A match verifies every currently active device.</p>
+            <p>Compare this QR code or all 60 digits over an authenticated channel. The code includes every active device credential verified against the current MLS tree.</p>
             <img src={verification.qr} width="240" height="240" alt="Contact safety QR code" />
             <code className="profile-identity">{verification.code}</code>
             <p className="devices-panel__notice">The code changes when either participant adds, replaces, or revokes an identity.</p>

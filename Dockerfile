@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -6,9 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN python -m pip install --upgrade pip \
-    && python -m pip install -r requirements.txt
+COPY requirements.lock .
+RUN python -m pip install --require-hashes -r requirements.lock
 
 COPY alembic.ini .
 COPY migrations ./migrations

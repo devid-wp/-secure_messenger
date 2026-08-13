@@ -29,6 +29,13 @@ export default [
       ...js.configs.recommended.rules,
       ...reactHooks.configs.flat.recommended.rules,
       'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
+          message: 'dangerouslySetInnerHTML is forbidden in the E2EE renderer.',
+        },
+      ],
       'react-refresh/only-export-components': [
         'warn',
         { allowConstantExport: true },

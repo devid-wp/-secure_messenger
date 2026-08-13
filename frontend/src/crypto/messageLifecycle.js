@@ -9,7 +9,12 @@ export function applyMessageLifecycle(events) {
     if (!item || seenEvents.has(item.client_id)) continue
     seenEvents.add(item.client_id)
     if (item.type === 'message' || item.type === 'attachment' || item.type === 'device_event') {
-      const message = { ...item, ...event.envelope }
+      const message = {
+        ...item,
+        id: event.envelope?.id,
+        timestamp: item.sent_at,
+        mls_epoch: event.envelope?.mls_epoch,
+      }
       if (item.type === 'device_event') Object.assign(message, { kind: 'system', content: item.event })
       if (item.type === 'attachment') Object.assign(message, {
         kind: 'file',
@@ -20,14 +25,14 @@ export function applyMessageLifecycle(events) {
     } else if (item.type !== 'group_metadata') pending.push(event)
   }
 
-  for (const { item, envelope } of pending) {
+  for (const { item } of pending) {
     const target = byClientId.get(item.target_client_id)
     if (!target) continue
     const sameAuthor = item.sender && target.sender
       ? target.sender === item.sender
       : target.sender_device_id === item.sender_device_id
-    if (item.type === 'edit' && sameAuthor && !target.deleted_at) Object.assign(target, { content: item.content, edited_at: envelope.timestamp })
-    else if (item.type === 'delete' && sameAuthor) Object.assign(target, { content: '', deleted_at: envelope.timestamp })
+    if (item.type === 'edit' && sameAuthor && !target.deleted_at) Object.assign(target, { content: item.content, edited_at: item.sent_at })
+    else if (item.type === 'delete' && sameAuthor) Object.assign(target, { content: '', deleted_at: item.sent_at })
     else if (item.type === 'reaction') {
       const reactions = new Map((target.reactions || []).map((reaction) => [`${reaction.sender_device_id}:${reaction.emoji}`, reaction]))
       reactions.set(`${item.sender_device_id}:${item.emoji}`, { sender: item.sender, sender_device_id: item.sender_device_id, emoji: item.emoji })

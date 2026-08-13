@@ -5,6 +5,7 @@ export const MLS_ERROR_CODES = Object.freeze({
   CORRUPTED_CIPHERTEXT: 'corrupted_ciphertext',
   UNKNOWN_SENDER_DEVICE: 'unknown_sender_device',
   PROTOCOL_VIOLATION: 'protocol_violation',
+  RESYNC_REQUIRED: 'resync_required',
 })
 
 export class MlsEnvelopeError extends Error {

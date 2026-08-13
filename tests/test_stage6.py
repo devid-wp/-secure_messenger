@@ -259,6 +259,28 @@ class StageSixMediaTests(unittest.TestCase):
         self.assertEqual(response.status_code, 413, response.text)
         self.assertEqual(list(self.media_dir.rglob("*.bin")), [])
 
+    def test_attachment_storage_quota_is_enforced_before_storage(self) -> None:
+        alice = self.register_and_login("quota-alice")
+        self.register_and_login("quota-bob")
+        chat = self.client.post(
+            "/api/v1/chats/dm", headers=self.headers(alice), json={"login": "quota-bob"},
+        ).json()
+        ciphertext = b"x" * 32
+        with mock.patch("app.routers.media.MAX_ATTACHMENT_STORAGE_BYTES_PER_USER", 48):
+            first = self.client.post(
+                "/api/v1/media/attachments", headers=self.headers(alice),
+                files={"ciphertext": ("ciphertext.bin", ciphertext, "application/octet-stream")},
+                data={"chat_id": str(chat["id"])},
+            )
+            second = self.client.post(
+                "/api/v1/media/attachments", headers=self.headers(alice),
+                files={"ciphertext": ("ciphertext.bin", ciphertext, "application/octet-stream")},
+                data={"chat_id": str(chat["id"])},
+            )
+        self.assertEqual(first.status_code, 201, first.text)
+        self.assertEqual(second.status_code, 413, second.text)
+        self.assertEqual(len(list(self.media_dir.rglob("*.bin"))), 1)
+
     def test_sticker_plaintext_websocket_payload_is_rejected(self) -> None:
         alice = self.register_and_login("alice")
         self.register_and_login("bob")

@@ -6,8 +6,8 @@ A React and Vite client for Secure Messenger.
 
 From the `frontend` directory:
 
-```powershell
-npm install
+```shell
+npm ci
 npm run dev
 ```
 
@@ -17,8 +17,12 @@ different backend origin.
 
 ## Production build
 
-```powershell
+```shell
+npm ci
+npm run lint
+npm run typecheck
 npm run build
+npm test
 ```
 
 The generated static files are written to `dist`.
@@ -26,12 +30,12 @@ The generated static files are written to `dist`.
 ## Docker
 
 The repository-level `compose.yaml` builds this frontend and serves it through
-Nginx at `http://localhost:8080`. Nginx also proxies API and WebSocket traffic to
-the backend container.
+Nginx at `http://localhost:8080` for local testing only. Nginx also proxies API
+and WebSocket traffic to the backend container. Production must place it behind
+an HTTPS ingress; browser E2EE must never be delivered over public HTTP.
 
 ## Requirements
 
-- Node.js 20 or newer
-- npm
-- Rust with the `wasm32-unknown-unknown` target
+- Node.js 20.19.0 and npm 10.8.2
+- Rust 1.88.0 with the `wasm32-unknown-unknown` target
 - `wasm-bindgen-cli` 0.2.126

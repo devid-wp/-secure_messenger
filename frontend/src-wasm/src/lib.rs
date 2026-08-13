@@ -26,26 +26,33 @@ struct Bootstrap {
     key_packages: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct GroupState {
     group_id: String,
     epoch: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
+struct DeviceCredential {
+    device_id: String,
+    identity_key: String,
+    fingerprint: String,
+}
+
+#[derive(Serialize, Deserialize)]
 struct AddOutput {
     commit: String,
     welcome: String,
     epoch: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct WireOutput {
     message: String,
     epoch: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ProcessOutput {
     Application { plaintext: String, epoch: u64 },
@@ -53,8 +60,15 @@ enum ProcessOutput {
     Proposal { epoch: u64 },
 }
 
+#[cfg(target_arch = "wasm32")]
 fn error(message: impl ToString) -> JsValue {
     JsValue::from_str(&message.to_string())
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn error(_message: impl ToString) -> JsValue {
+    // `JsValue::from_str` is only implemented by the wasm-bindgen runtime.
+    // Native tests only need the Result boundary when asserting rejection.
+    JsValue::NULL
 }
 fn json<T: Serialize>(value: &T) -> Result<String, JsValue> {
     serde_json::to_string(value).map_err(error)
@@ -251,6 +265,24 @@ impl WasmMlsClient {
         )
     }
 
+    pub fn group_credentials(&self, chat_id: String) -> Result<String, JsValue> {
+        let group = self.load_group(&chat_id)?;
+        json(
+            &group
+                .members()
+                .map(|member| DeviceCredential {
+                    device_id: String::from_utf8_lossy(member.credential.serialized_content())
+                        .into_owned(),
+                    identity_key: B64.encode(&member.signature_key),
+                    fingerprint: Sha256::digest(&member.signature_key)
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect(),
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
     pub fn add_members(&self, chat_id: String, packages_json: String) -> Result<String, JsValue> {
         let encoded: Vec<String> = serde_json::from_str(&packages_json).map_err(error)?;
         let packages = encoded
@@ -426,6 +458,36 @@ mod tests {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
+    fn two_member_group(chat_id: &str) -> (WasmMlsClient, WasmMlsClient) {
+        let alice = WasmMlsClient::new("alice-device".into(), vec![]).unwrap();
+        let bob = WasmMlsClient::new("bob-device".into(), vec![]).unwrap();
+        alice.create_group(chat_id.into()).unwrap();
+        let bootstrap: Bootstrap = serde_json::from_str(&bob.bootstrap(1).unwrap()).unwrap();
+        let packages = serde_json::to_string(&bootstrap.key_packages).unwrap();
+        let added: AddOutput =
+            serde_json::from_str(&alice.add_members(chat_id.into(), packages).unwrap()).unwrap();
+        bob.join_group(B64.decode(added.welcome).unwrap()).unwrap();
+        (alice, bob)
+    }
+
+    fn wire_message(client: &WasmMlsClient, chat_id: &str, plaintext: &[u8]) -> WireOutput {
+        serde_json::from_str(
+            &client
+                .encrypt(chat_id.into(), plaintext.to_vec())
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn process_output(client: &WasmMlsClient, chat_id: &str, message: &str) -> ProcessOutput {
+        serde_json::from_str(
+            &client
+                .process(chat_id.into(), B64.decode(message).unwrap())
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
     #[wasm_bindgen_test]
     fn state_round_trip_preserves_identity_and_key_packages() {
         let first = WasmMlsClient::new("pwa-device".into(), vec![]).unwrap();
@@ -437,5 +499,348 @@ mod tests {
         let later: Bootstrap = serde_json::from_str(&restored.bootstrap(0).unwrap()).unwrap();
         assert_eq!(initial.identity_key, later.identity_key);
         assert_eq!(initial.fingerprint, later.fingerprint);
+    }
+
+    #[test]
+    fn dm_and_group_chats_create_distinct_mls_groups() {
+        let client = WasmMlsClient::new("coordinator-device".into(), vec![]).unwrap();
+        let dm: GroupState =
+            serde_json::from_str(&client.create_group("41".into()).unwrap()).unwrap();
+        let group: GroupState =
+            serde_json::from_str(&client.create_group("42".into()).unwrap()).unwrap();
+
+        assert_ne!(dm.group_id, group.group_id);
+        assert_eq!(dm.epoch, 0);
+        assert_eq!(group.epoch, 0);
+        let dm_members: Vec<String> =
+            serde_json::from_str(&client.group_members("41".into()).unwrap()).unwrap();
+        let group_members: Vec<String> =
+            serde_json::from_str(&client.group_members("42".into()).unwrap()).unwrap();
+        assert_eq!(dm_members, vec!["coordinator-device"]);
+        assert_eq!(group_members, vec!["coordinator-device"]);
+    }
+
+    #[test]
+    fn add_update_and_remove_commits_cover_every_participant_device() {
+        let chat_id = "multi-device-group";
+        let alice = WasmMlsClient::new("alice-device".into(), vec![]).unwrap();
+        let bob_phone = WasmMlsClient::new("bob-phone".into(), vec![]).unwrap();
+        let bob_browser = WasmMlsClient::new("bob-browser".into(), vec![]).unwrap();
+        alice.create_group(chat_id.into()).unwrap();
+
+        let phone_bootstrap: Bootstrap =
+            serde_json::from_str(&bob_phone.bootstrap(1).unwrap()).unwrap();
+        let browser_bootstrap: Bootstrap =
+            serde_json::from_str(&bob_browser.bootstrap(1).unwrap()).unwrap();
+        let packages = serde_json::to_string(&vec![
+            phone_bootstrap.key_packages[0].clone(),
+            browser_bootstrap.key_packages[0].clone(),
+        ])
+        .unwrap();
+        let added: AddOutput =
+            serde_json::from_str(&alice.add_members(chat_id.into(), packages).unwrap()).unwrap();
+        assert_eq!(added.epoch, 1);
+        let welcome = B64.decode(&added.welcome).unwrap();
+        bob_phone.join_group(welcome.clone()).unwrap();
+        bob_browser.join_group(welcome).unwrap();
+
+        for client in [&alice, &bob_phone, &bob_browser] {
+            let members: Vec<String> =
+                serde_json::from_str(&client.group_members(chat_id.into()).unwrap()).unwrap();
+            assert_eq!(members.len(), 3);
+            assert!(members.contains(&"alice-device".to_string()));
+            assert!(members.contains(&"bob-phone".to_string()));
+            assert!(members.contains(&"bob-browser".to_string()));
+            let credentials: Vec<DeviceCredential> = serde_json::from_str(
+                &client.group_credentials(chat_id.into()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(credentials.len(), 3);
+            assert!(credentials.iter().all(|credential| {
+                B64.decode(&credential.identity_key)
+                    .map(|key| Sha256::digest(key)
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>() == credential.fingerprint)
+                    .unwrap_or(false)
+            }));
+        }
+
+        let alice_update: WireOutput =
+            serde_json::from_str(&alice.self_update(chat_id.into()).unwrap()).unwrap();
+        assert_eq!(alice_update.epoch, 2);
+        let alice_commit = B64.decode(alice_update.message).unwrap();
+        bob_phone
+            .process(chat_id.into(), alice_commit.clone())
+            .unwrap();
+        bob_browser.process(chat_id.into(), alice_commit).unwrap();
+
+        let phone_update: WireOutput =
+            serde_json::from_str(&bob_phone.self_update(chat_id.into()).unwrap()).unwrap();
+        assert_eq!(phone_update.epoch, 3);
+        let phone_commit = B64.decode(phone_update.message).unwrap();
+        alice.process(chat_id.into(), phone_commit.clone()).unwrap();
+        bob_browser.process(chat_id.into(), phone_commit).unwrap();
+
+        let browser_update: WireOutput =
+            serde_json::from_str(&bob_browser.self_update(chat_id.into()).unwrap()).unwrap();
+        assert_eq!(browser_update.epoch, 4);
+        let browser_commit = B64.decode(browser_update.message).unwrap();
+        alice
+            .process(chat_id.into(), browser_commit.clone())
+            .unwrap();
+        bob_phone.process(chat_id.into(), browser_commit).unwrap();
+
+        let remove_phone: WireOutput = serde_json::from_str(
+            &alice
+                .remove_devices(chat_id.into(), r#"["bob-phone"]"#.into())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(remove_phone.epoch, 5);
+        bob_browser
+            .process(chat_id.into(), B64.decode(remove_phone.message).unwrap())
+            .unwrap();
+        let remaining: Vec<String> =
+            serde_json::from_str(&alice.group_members(chat_id.into()).unwrap()).unwrap();
+        assert_eq!(remaining, vec!["alice-device", "bob-browser"]);
+
+        let remove_browser: WireOutput = serde_json::from_str(
+            &alice
+                .remove_devices(chat_id.into(), r#"["bob-browser"]"#.into())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(remove_browser.epoch, 6);
+        let remaining: Vec<String> =
+            serde_json::from_str(&alice.group_members(chat_id.into()).unwrap()).unwrap();
+        assert_eq!(remaining, vec!["alice-device"]);
+    }
+
+    #[test]
+    fn epoch_changes_after_add_device_revocation_and_participant_leave() {
+        let chat_id = "membership-epoch-group";
+        let coordinator = WasmMlsClient::new("owner-device".into(), vec![]).unwrap();
+        let member_phone = WasmMlsClient::new("member-phone".into(), vec![]).unwrap();
+        let member_browser = WasmMlsClient::new("member-browser".into(), vec![]).unwrap();
+        let initial: GroupState =
+            serde_json::from_str(&coordinator.create_group(chat_id.into()).unwrap()).unwrap();
+        assert_eq!(initial.epoch, 0);
+
+        let phone: Bootstrap =
+            serde_json::from_str(&member_phone.bootstrap(1).unwrap()).unwrap();
+        let browser: Bootstrap =
+            serde_json::from_str(&member_browser.bootstrap(1).unwrap()).unwrap();
+        let packages = serde_json::to_string(&vec![
+            phone.key_packages[0].clone(),
+            browser.key_packages[0].clone(),
+        ])
+        .unwrap();
+        let add: AddOutput = serde_json::from_str(
+            &coordinator
+                .add_members(chat_id.into(), packages)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(add.epoch, initial.epoch + 1, "Add Commit must advance epoch");
+
+        let revoke: WireOutput = serde_json::from_str(
+            &coordinator
+                .remove_devices(chat_id.into(), r#"["member-phone"]"#.into())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            revoke.epoch,
+            add.epoch + 1,
+            "device revocation Remove Commit must advance epoch"
+        );
+
+        let leave: WireOutput = serde_json::from_str(
+            &coordinator
+                .remove_devices(chat_id.into(), r#"["member-browser"]"#.into())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            leave.epoch,
+            revoke.epoch + 1,
+            "participant leave Remove Commit must advance epoch"
+        );
+        let remaining: Vec<String> = serde_json::from_str(
+            &coordinator.group_members(chat_id.into()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(remaining, vec!["owner-device"]);
+    }
+
+    #[test]
+    fn replay_and_duplicate_application_messages_are_rejected() {
+        let chat_id = "replay-group";
+        let (alice, bob) = two_member_group(chat_id);
+        let message = wire_message(&alice, chat_id, b"deliver exactly once");
+
+        assert!(matches!(
+            process_output(&bob, chat_id, &message.message),
+            ProcessOutput::Application { epoch: 1, .. }
+        ));
+        assert!(
+            bob.process(chat_id.into(), B64.decode(&message.message).unwrap())
+                .is_err(),
+            "replaying identical MLS ciphertext must be rejected"
+        );
+    }
+
+    #[test]
+    fn application_messages_can_be_delivered_out_of_order_once() {
+        let chat_id = "application-reorder-group";
+        let (alice, bob) = two_member_group(chat_id);
+        let first = wire_message(&alice, chat_id, b"first");
+        let second = wire_message(&alice, chat_id, b"second");
+
+        let second_output = process_output(&bob, chat_id, &second.message);
+        let first_output = process_output(&bob, chat_id, &first.message);
+        assert!(matches!(
+            second_output,
+            ProcessOutput::Application { epoch: 1, .. }
+        ));
+        assert!(matches!(
+            first_output,
+            ProcessOutput::Application { epoch: 1, .. }
+        ));
+        assert!(
+            bob.process(chat_id.into(), B64.decode(first.message).unwrap())
+                .is_err(),
+            "an out-of-order message must still be consumable only once"
+        );
+    }
+
+    #[test]
+    fn delayed_old_epoch_application_is_rejected_after_commit() {
+        let chat_id = "delayed-old-epoch-group";
+        let (alice, bob) = two_member_group(chat_id);
+        let delayed = wire_message(&alice, chat_id, b"epoch one");
+        let update: WireOutput =
+            serde_json::from_str(&alice.self_update(chat_id.into()).unwrap()).unwrap();
+
+        assert!(matches!(
+            process_output(&bob, chat_id, &update.message),
+            ProcessOutput::Commit { epoch: 2 }
+        ));
+        assert!(
+            bob.process(chat_id.into(), B64.decode(delayed.message).unwrap())
+                .is_err(),
+            "an application delayed past its epoch must be rejected"
+        );
+    }
+
+    #[test]
+    fn future_epoch_application_waits_for_the_missing_commit() {
+        let chat_id = "future-epoch-group";
+        let (alice, bob) = two_member_group(chat_id);
+        let update: WireOutput =
+            serde_json::from_str(&alice.self_update(chat_id.into()).unwrap()).unwrap();
+        let future = wire_message(&alice, chat_id, b"epoch two");
+
+        assert!(
+            bob.process(chat_id.into(), B64.decode(&future.message).unwrap())
+                .is_err(),
+            "an application from a future epoch must be rejected until its Commit arrives"
+        );
+        assert!(matches!(
+            process_output(&bob, chat_id, &update.message),
+            ProcessOutput::Commit { epoch: 2 }
+        ));
+        assert!(matches!(
+            process_output(&bob, chat_id, &future.message),
+            ProcessOutput::Application { epoch: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn reordered_commit_is_rejected_then_applies_after_the_missing_commit() {
+        let chat_id = "commit-reorder-group";
+        let (alice, bob) = two_member_group(chat_id);
+        let epoch_two: WireOutput =
+            serde_json::from_str(&alice.self_update(chat_id.into()).unwrap()).unwrap();
+        let epoch_three: WireOutput =
+            serde_json::from_str(&alice.self_update(chat_id.into()).unwrap()).unwrap();
+
+        assert!(
+            bob.process(chat_id.into(), B64.decode(&epoch_three.message).unwrap())
+                .is_err(),
+            "Commit for epoch three must not skip the epoch two Commit"
+        );
+        assert!(matches!(
+            process_output(&bob, chat_id, &epoch_two.message),
+            ProcessOutput::Commit { epoch: 2 }
+        ));
+        assert!(matches!(
+            process_output(&bob, chat_id, &epoch_three.message),
+            ProcessOutput::Commit { epoch: 3 }
+        ));
+    }
+
+    #[test]
+    fn corrupted_ciphertext_is_rejected_without_plaintext() {
+        let chat_id = "corrupted-ciphertext-group";
+        let (alice, bob) = two_member_group(chat_id);
+        let message = wire_message(&alice, chat_id, b"authenticated plaintext");
+        let mut corrupted = B64.decode(message.message).unwrap();
+        let last = corrupted.len() - 1;
+        corrupted[last] ^= 0x01;
+
+        assert!(
+            bob.process(chat_id.into(), corrupted.clone()).is_err(),
+            "a one-bit ciphertext modification must fail authentication"
+        );
+        assert_eq!(
+            bob.cached_application(corrupted).unwrap(),
+            None,
+            "failed authentication must never populate the plaintext cache"
+        );
+    }
+
+    #[test]
+    fn forked_commit_with_mismatched_transcript_is_rejected() {
+        let chat_id = "forked-transcript-group";
+        let alice = WasmMlsClient::new("alice-device".into(), vec![]).unwrap();
+        let bob = WasmMlsClient::new("bob-device".into(), vec![]).unwrap();
+        let observer = WasmMlsClient::new("observer-device".into(), vec![]).unwrap();
+        alice.create_group(chat_id.into()).unwrap();
+
+        let bob_package: Bootstrap = serde_json::from_str(&bob.bootstrap(1).unwrap()).unwrap();
+        let observer_package: Bootstrap =
+            serde_json::from_str(&observer.bootstrap(1).unwrap()).unwrap();
+        let packages = serde_json::to_string(&vec![
+            bob_package.key_packages[0].clone(),
+            observer_package.key_packages[0].clone(),
+        ])
+        .unwrap();
+        let added: AddOutput =
+            serde_json::from_str(&alice.add_members(chat_id.into(), packages).unwrap()).unwrap();
+        let welcome = B64.decode(added.welcome).unwrap();
+        bob.join_group(welcome.clone()).unwrap();
+        observer.join_group(welcome).unwrap();
+
+        // Both members commit from epoch 1, creating two valid but divergent
+        // transcript branches. Once the observer chooses Alice's branch, the
+        // competing Bob branch must not merge into it.
+        let alice_branch: WireOutput =
+            serde_json::from_str(&alice.self_update(chat_id.into()).unwrap()).unwrap();
+        let bob_branch: WireOutput =
+            serde_json::from_str(&bob.self_update(chat_id.into()).unwrap()).unwrap();
+        assert_eq!(alice_branch.epoch, 2);
+        assert_eq!(bob_branch.epoch, 2);
+        assert!(matches!(
+            process_output(&observer, chat_id, &alice_branch.message),
+            ProcessOutput::Commit { epoch: 2 }
+        ));
+        assert!(
+            observer
+                .process(chat_id.into(), B64.decode(bob_branch.message).unwrap())
+                .is_err(),
+            "a Commit from a competing transcript fork must be rejected"
+        );
     }
 }
