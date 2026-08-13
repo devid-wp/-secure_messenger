@@ -27,6 +27,7 @@ import {
 import { decryptAttachment, encryptAttachment, MAX_ATTACHMENT_BYTES } from '../crypto/attachmentCrypto'
 import { createSafetyCode } from '../crypto/safetyCode'
 import { applyMessageLifecycle } from '../crypto/messageLifecycle'
+import { mergeMessageFeed, replacePendingStatus } from '../crypto/messageFeed'
 import { MLS_ERROR_CODES } from '../crypto/mlsErrors'
 import QRCode from 'qrcode'
 
@@ -579,7 +580,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
           const pending = outboxRef.current.filter(
             (message) => message.chat_id === activeChatId
           )
-          setMessages([...decrypted, ...pending])
+          setMessages(mergeMessageFeed(decrypted, pending))
           setNextCursor(null)
           setChats((previous) => previous.map((chat) => (
             chat.id === activeChatId ? { ...chat, unread_count: 0 } : chat
@@ -898,6 +899,26 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       setMessages((previous) => previous.map((message) => (
         message.client_id === clientId ? { ...message, status: 'failed' } : message
       )))
+    }
+  }
+
+  const retryPendingMessage = async (message) => {
+    if (!message?.client_id || message.status === 'sending') return
+    setError('')
+    setMessages((previous) => replacePendingStatus(previous, message.client_id, 'sending'))
+    try {
+      await synchronizeMlsGroup(token, deviceId, message.chat_id)
+      const envelope = await encryptAndPublish(token, message.chat_id, message)
+      decryptedEnvelopesRef.current.set(envelope.id, message)
+      outboxRef.current = outboxRef.current.filter((item) => item.client_id !== message.client_id)
+      setMessages((previous) => previous.map((item) => (
+        item.client_id === message.client_id
+          ? { ...item, id: `mls:${envelope.id}`, status: 'sent', timestamp: envelope.created_at, mls_epoch: envelope.epoch }
+          : item
+      )))
+    } catch (retryError) {
+      setMessages((previous) => replacePendingStatus(previous, message.client_id, 'failed'))
+      setError(retryError.message || 'Encrypted retry failed')
     }
   }
 
@@ -1582,6 +1603,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     }
     setAttachmentBusy(true)
     setError('')
+    let clientId = null
     try {
       const { ciphertext, descriptor } = await encryptAttachment(file)
       const form = new FormData()
@@ -1598,7 +1620,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       }
       const attachment = await response.json()
       descriptor.object_id = attachment.id
-      const clientId = crypto.randomUUID()
+      clientId = crypto.randomUUID()
       const kind = IMAGE_ATTACHMENT_TYPES.has(file.type) ? 'image' : 'file'
       const pendingMessage = {
         id: `pending:${clientId}`,
@@ -1625,6 +1647,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       )))
     } catch (attachmentError) {
       setError(attachmentError.message || 'Could not encrypt attachment')
+      if (clientId) setMessages((previous) => replacePendingStatus(previous, clientId, 'failed'))
     } finally {
       setAttachmentBusy(false)
     }
@@ -1860,7 +1883,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
                     {own && <MessageStatus status={message.status} />}
                   </span>
                   {!message.deleted_at && message.client_id && (
-                    <MessageActions message={message} own={own} onReply={setReplyingTo} onEdit={editMessage} onDelete={deleteMessage} onReact={reactToMessage} />
+                    <MessageActions message={message} own={own} onReply={setReplyingTo} onEdit={editMessage} onDelete={deleteMessage} onReact={reactToMessage} onRetry={retryPendingMessage} />
                   )}
                 </div>
               </div>

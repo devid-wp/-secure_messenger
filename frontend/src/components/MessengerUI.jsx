@@ -198,14 +198,15 @@ export function MessageStatus({ status }) {
   return <span className={`message-status message-status--${status}`} title={meta.label} aria-label={meta.label}>{meta.symbol}</span>
 }
 
-export function MessageActions({ message, own, onReply, onEdit, onDelete, onReact }) {
+export function MessageActions({ message, own, onReply, onEdit, onDelete, onReact, onRetry }) {
   return (
     <div className="message-actions" role="group" aria-label="Message actions">
       <button type="button" onClick={() => onReply(message)} title="Reply" aria-label="Reply"><Icon name="reply" size={16} /></button>
       <button type="button" onClick={() => onReact(message, '👍')} title="React" aria-label="React with thumbs up">👍</button>
-      {own && (
-        <>
-          {message.kind === 'text' && <button type="button" onClick={() => onEdit(message)} title="Edit" aria-label="Edit"><Icon name="edit" size={15} /></button>}
+        {own && (
+          <>
+            {message.status === 'failed' && <button type="button" onClick={() => onRetry(message)} title="Retry" aria-label="Retry sending">Retry</button>}
+            {message.kind === 'text' && <button type="button" onClick={() => onEdit(message)} title="Edit" aria-label="Edit"><Icon name="edit" size={15} /></button>}
           <button type="button" onClick={() => onDelete(message)} title="Delete" aria-label="Delete"><Icon name="trash" size={15} /></button>
         </>
       )}

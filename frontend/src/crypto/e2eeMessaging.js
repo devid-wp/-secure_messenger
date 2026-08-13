@@ -6,6 +6,7 @@ import {
 import { synchronizeDeviceMls } from './e2eeBootstrap'
 import { assertAuthenticatedPayloadSender, decodeApplicationPayload, encodeApplicationPayload } from './applicationPayload'
 import { classifyMlsError, isExpectedMlsError, MLS_ERROR_CODES, MlsEnvelopeError } from './mlsErrors'
+import { confirmRetryableEnvelope, getRetryableEnvelope } from './outgoingEnvelopeCache'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const deviceOwners = new Map()
@@ -136,10 +137,16 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
 export async function encryptAndPublish(token, chatId, message) {
   const senderDeviceId = localDevicesByChat.get(chatId)
   if (!senderDeviceId) throw new Error('MLS group must be synchronized before publishing')
-  const reply = message.reply_to_client_id ? { target_client_id: message.reply_to_client_id } : undefined
-  const plaintext = encodeApplicationPayload({ ...message, sender_device_id: senderDeviceId, reply })
-  const encrypted = await encryptMls(chatId, plaintext)
-  return publishEnvelope(token, chatId, 'application', encrypted.epoch, encrypted.ciphertext)
+  if (!message?.client_id) throw new Error('Encrypted message requires a client identifier')
+  const wireKey = `${chatId}:${message.client_id}`
+  const encrypted = await getRetryableEnvelope(wireKey, async () => {
+    const reply = message.reply_to_client_id ? { target_client_id: message.reply_to_client_id } : undefined
+    const plaintext = encodeApplicationPayload({ ...message, sender_device_id: senderDeviceId, reply })
+    return encryptMls(chatId, plaintext)
+  })
+  const envelope = await publishEnvelope(token, chatId, 'application', encrypted.epoch, encrypted.ciphertext)
+  confirmRetryableEnvelope(wireKey)
+  return envelope
 }
 
 export async function decryptEnvelope(chatId, envelope) {
