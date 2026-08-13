@@ -1,0 +1,7 @@
+route:
+  receiver: configured-webhook
+receivers:
+  - name: configured-webhook
+    webhook_configs:
+      - url: __ALERT_WEBHOOK_URL__
+        send_resolved: true

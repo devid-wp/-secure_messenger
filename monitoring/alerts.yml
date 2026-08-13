@@ -1,0 +1,50 @@
+groups:
+  - name: secure-messenger-technical
+    rules:
+      - alert: SecureMessengerApiUnavailable
+        expr: up{job="secure-messenger-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Secure Messenger API is unavailable
+
+      - alert: SecureMessengerWebSocketTransportUnavailable
+        expr: up{job="secure-messenger-websocket"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Secure Messenger WebSocket transport is unavailable
+
+      - alert: SecureMessengerHighApiErrorRate
+        expr: sum(rate(secure_messenger_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(secure_messenger_http_requests_total[5m])), 1) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: API 5xx error rate is above 5 percent
+
+      - alert: SecureMessengerHighApiLatency
+        expr: sum(rate(secure_messenger_http_request_duration_seconds_sum[5m])) / clamp_min(sum(rate(secure_messenger_http_request_duration_seconds_count[5m])), 1) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: API average latency is above one second
+
+      - alert: SecureMessengerStorageNearlyFull
+        expr: minio_cluster_capacity_usable_free_bytes / minio_cluster_capacity_usable_total_bytes < 0.15
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Object storage has less than 15 percent free capacity
+
+      - alert: SecureMessengerCertificateExpiring
+        expr: (probe_ssl_earliest_cert_expiry - time()) < 1209600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: Public TLS certificate expires in less than 14 days

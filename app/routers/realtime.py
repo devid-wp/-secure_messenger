@@ -9,6 +9,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/realtime", tags=["realtime"])
 
 
+@router.get("/health", include_in_schema=False)
+async def websocket_transport_health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """Receive server-originated opaque events only.
@@ -47,6 +52,7 @@ async def websocket_endpoint(websocket: WebSocket):
             return
 
     manager = websocket.app.state.connection_manager
+    websocket.app.state.technical_metrics.websocket_opened()
     await manager.connect(
         token,
         session_data.user_id,
@@ -72,3 +78,6 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.exception(
             "Unexpected WebSocket error for user_id=%s", session_data.user_id
         )
+    finally:
+        websocket.app.state.technical_metrics.websocket_closed()
+        await manager.disconnect(token)
