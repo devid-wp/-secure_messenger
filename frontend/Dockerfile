@@ -1,4 +1,4 @@
-FROM rust:1.88.0-alpine AS wasm
+FROM rust:1.91.0-alpine AS wasm
 
 RUN apk add --no-cache musl-dev && rustup target add wasm32-unknown-unknown
 RUN cargo install wasm-bindgen-cli --version 0.2.126 --locked
@@ -19,7 +19,7 @@ COPY --from=wasm /wasm-generated ./src/crypto/wasm-generated
 ENV VITE_API_URL=""
 RUN npx vite build
 
-FROM nginx:1.27-alpine
+FROM nginx:1.29.7-alpine3.23
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 RUN chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /var/run
