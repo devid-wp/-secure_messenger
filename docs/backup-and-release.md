@@ -46,6 +46,13 @@ Before creating a version/tag, use a clean staging environment and require:
 5. Container images are built from the immutable commit, signed by the release
    pipeline, and their digests are recorded beside the version tag.
 
+When all five gates are green, run **Publish signed release** from `main` with
+the chosen semantic version. The workflow refuses to run without a successful
+`Release security gate` for the same commit, publishes backend/frontend images
+to GHCR, signs their immutable digests with Cosign keyless GitHub OIDC,
+publishes provenance attestations, and creates the annotated `v<version>` tag
+and GitHub release with `release-digests.txt`.
+
 Do not tag or publish a release if any item is missing. This repository does
 not yet attest that a clean staging RC has been executed; that requires the
 deployment credentials and an operator-controlled staging environment.
