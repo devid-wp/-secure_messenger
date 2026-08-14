@@ -17,6 +17,7 @@ let client = null
 let activeDeviceId = null
 let activeDek = null
 let wasmReady = null
+let requestQueue = Promise.resolve()
 
 function openDatabase() {
   return new Promise((resolve, reject) => {
@@ -272,6 +273,7 @@ const handlers = {
     const value = parse(client.create_group(String(chatId))); await persist(); return value
   },
   async members({ chatId }) { return parse(client.group_members(String(chatId))) },
+  async epoch({ chatId }) { return client.group_epoch(String(chatId)) },
   async credentials({ chatId }) { return parse(client.group_credentials(String(chatId))) },
   async addMembers({ chatId, keyPackages }) {
     requireUnlocked()
@@ -320,13 +322,16 @@ const handlers = {
   },
 }
 
-self.onmessage = async ({ data }) => {
+self.onmessage = ({ data }) => {
   const { id, method, arguments: args } = data
-  try {
+  // Every handler reads or mutates the same WASM client and encrypted vault
+  // snapshot. Serializing requests prevents concurrent workspace/message syncs
+  // from exporting an older snapshot over a newer MLS epoch.
+  requestQueue = requestQueue.then(async () => {
     if (!handlers[method]) throw new Error(`Unknown MLS worker method: ${method}`)
     const result = await handlers[method](args || {})
     self.postMessage({ id, result })
-  } catch (caught) {
+  }).catch((caught) => {
     self.postMessage({ id, error: caught instanceof Error ? caught.message : String(caught) })
-  }
+  })
 }

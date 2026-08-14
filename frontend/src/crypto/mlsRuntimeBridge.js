@@ -45,6 +45,7 @@ export const encryptMls = (chatId, plaintext) => invokeWorker('encrypt', { chatI
 export const processMls = (chatId, message) => invokeWorker('process', { chatId, message })
 export const cachedMlsApplication = (message) => invokeWorker('cached', { message })
 export const listMlsMembers = (chatId) => invokeWorker('members', { chatId })
+export const getMlsEpoch = (chatId) => invokeWorker('epoch', { chatId })
 export const listMlsCredentials = (chatId) => invokeWorker('credentials', { chatId })
 export const removeMlsDevices = (chatId, deviceIds) => invokeWorker('remove', { chatId, deviceIds })
 export const updateMlsGroup = (chatId) => invokeWorker('update', { chatId })

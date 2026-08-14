@@ -19,7 +19,7 @@ export class MlsEnvelopeError extends Error {
 export function classifyMlsError(error) {
   if (error instanceof MlsEnvelopeError) return error
   const detail = String(error?.message || error || '').toLowerCase()
-  if (/duplicate|replay|already (?:processed|consumed|exists)|secret.?reuse|no matching key.?package/.test(detail)) {
+  if (/duplicate|replay|already (?:processed|consumed|exists)|secret.?reuse|no matching key.?package|nomatchingkeypackage|missingkeypackage/.test(detail)) {
     return new MlsEnvelopeError(MLS_ERROR_CODES.DUPLICATE, 'Duplicate MLS envelope', error)
   }
   if (/stale|past epoch|too old|too.?distant.?in.?the.?past|epoch.*(?:past|old)/.test(detail)) {

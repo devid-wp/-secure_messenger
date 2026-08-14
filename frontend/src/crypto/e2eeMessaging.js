@@ -1,6 +1,6 @@
 import {
   addMlsMembers, cachedMlsApplication, createMlsGroup, encryptMls,
-  joinMlsGroup, listMlsMembers, mlsRuntimeAvailable, processMls,
+  getMlsEpoch, joinMlsGroup, listMlsMembers, mlsRuntimeAvailable, processMls,
   removeMlsDevices, updateMlsGroup,
 } from './mlsRuntimeBridge'
 import { synchronizeDeviceMls } from './e2eeBootstrap'
@@ -86,15 +86,45 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
   }
 
   const envelopes = await api(`/chats/${chatId}/envelopes?after=0`, token)
+  let localGroupExists = false
+  let localEpoch = null
+  try {
+    localEpoch = await getMlsEpoch(chatId)
+    localGroupExists = true
+  } catch (error) {
+    if (!/not initialized/i.test(String(error?.message || error))) throw error
+  }
+
+  // A new member cannot process the Add Commit before it has joined from its
+  // Welcome. Conversely, replaying an old Welcome after a reload consumes a
+  // KeyPackage twice and must not turn a healthy persisted group into a
+  // protocol violation.
+  if (!localGroupExists) {
+    const welcomes = envelopes.filter((envelope) => envelope.content_type === 'welcome')
+    for (const envelope of welcomes) {
+      try {
+        authenticatedSender(envelope)
+        const joined = await joinMlsGroup(base64ToBytes(envelope.payload))
+        localEpoch = joined.epoch
+        localGroupExists = true
+        break
+      } catch (error) {
+        const classified = reportMlsIssue(error, envelope, chatId)
+        if (!isExpectedMlsError(classified)) throw classified
+      }
+    }
+  }
   const deferred = []
   for (const envelope of envelopes) {
     if (envelope.sender_device_id === deviceId) continue
     if (envelope.content_type === 'application') continue
+    if (envelope.content_type === 'welcome') continue
+    if (localEpoch !== null && envelope.epoch <= localEpoch) continue
     try {
       authenticatedSender(envelope)
       const wire = base64ToBytes(envelope.payload)
-      if (envelope.content_type === 'welcome') await joinMlsGroup(wire)
-      else await processMls(chatId, wire)
+      const processed = await processMls(chatId, wire)
+      localEpoch = processed.epoch
     } catch (error) {
       const classified = reportMlsIssue(error, envelope, chatId)
       if (classified.code === MLS_ERROR_CODES.MISSING_COMMIT) deferred.push(envelope)
@@ -104,8 +134,8 @@ export async function synchronizeMlsGroup(token, deviceId, chatId) {
   for (const envelope of deferred) {
     try {
       const wire = base64ToBytes(envelope.payload)
-      if (envelope.content_type === 'welcome') await joinMlsGroup(wire)
-      else await processMls(chatId, wire)
+      const processed = await processMls(chatId, wire)
+      localEpoch = processed.epoch
     } catch (error) {
       const classified = reportMlsIssue(error, envelope, chatId)
       if (!isExpectedMlsError(classified)) throw classified
@@ -153,8 +183,9 @@ export async function encryptAndPublish(token, chatId, message) {
   if (!message?.client_id) throw new Error('Encrypted message requires a client identifier')
   const wireKey = `${chatId}:${message.client_id}`
   const encrypted = await getRetryableEnvelope(wireKey, async () => {
-    const reply = message.reply_to_client_id ? { target_client_id: message.reply_to_client_id } : undefined
-    const plaintext = encodeApplicationPayload({ ...message, sender_device_id: senderDeviceId, reply })
+    const payload = { ...message, sender_device_id: senderDeviceId }
+    if (message.reply_to_client_id) payload.reply = { target_client_id: message.reply_to_client_id }
+    const plaintext = encodeApplicationPayload(payload)
     return encryptMls(chatId, plaintext)
   })
   const envelope = await publishEnvelope(token, chatId, 'application', encrypted.epoch, encrypted.ciphertext)

@@ -265,6 +265,10 @@ impl WasmMlsClient {
         )
     }
 
+    pub fn group_epoch(&self, chat_id: String) -> Result<u64, JsValue> {
+        Ok(self.load_group(&chat_id)?.epoch().as_u64())
+    }
+
     pub fn group_credentials(&self, chat_id: String) -> Result<String, JsValue> {
         let group = self.load_group(&chat_id)?;
         json(
