@@ -1,3 +1,4 @@
+use ::tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
@@ -5,7 +6,6 @@ use openmls_rust_crypto::OpenMlsRustCrypto;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
 use wasm_bindgen::prelude::*;
 
 const SUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;

@@ -2,7 +2,7 @@
 name = "secure-messenger-mls-wasm"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.88.0"
+rust-version = "1.91.0"
 
 [lib]
 crate-type = ["cdylib"]
@@ -10,13 +10,13 @@ crate-type = ["cdylib"]
 [dependencies]
 base64 = "0.22"
 getrandom = { version = "0.2", features = ["js"] }
-openmls = { version = "=0.8.1", features = ["js"] }
-openmls_basic_credential = "=0.5.0"
-openmls_rust_crypto = "=0.5.1"
+openmls = { version = "=0.9.0-rc.2", features = ["js", "0-8-1-storage-format"] }
+openmls_basic_credential = "=0.6.0-rc.2"
+openmls_rust_crypto = "=0.6.0-rc.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tls_codec = "0.4"
+tls_codec = "0.5"
 wasm-bindgen = "=0.2.126"
 
 [dev-dependencies]
