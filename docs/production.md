@@ -2,8 +2,8 @@
 
 ## Development
 
-Use the pinned toolchain: Python 3.12.11, Node 20.19.0/npm 10.8.2, and Rust
-1.88.0 with `wasm32-unknown-unknown`.
+Use the pinned toolchain: Python 3.12.13, Node 20.19.0/npm 10.8.2, and Rust
+1.91.0 with `wasm32-unknown-unknown`.
 
 ```sh
 cd frontend
