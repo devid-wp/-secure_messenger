@@ -136,3 +136,63 @@ jobs:
         run: |
           echo "A test, dependency audit, or container audit failed. Critical and high findings block the release."
           exit 1
+
+  staging-release-candidate:
+    needs: release-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate isolated staging credentials
+        run: |
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 32)"
+            echo "REDIS_PASSWORD=$(openssl rand -hex 32)"
+            echo "S3_ACCESS_KEY_ID=ci$(openssl rand -hex 12)"
+            echo "S3_SECRET_ACCESS_KEY=$(openssl rand -hex 32)"
+            echo "S3_BUCKET=secure-messenger-ci"
+            echo "PUBLIC_ORIGIN=https://staging.invalid"
+            echo "ALERT_WEBHOOK_URL=https://alerts.invalid/secure-messenger"
+          } > .ci-staging.env
+      - name: Start clean production-shaped staging stack
+        run: docker compose --env-file .ci-staging.env up -d --build --wait --wait-timeout 240
+      - name: Smoke test public surface and private metrics
+        run: |
+          curl --fail --show-error --retry 10 --retry-connrefused http://127.0.0.1:8080/
+          curl --fail --show-error http://127.0.0.1:8080/api/v1/realtime/health
+          docker compose --env-file .ci-staging.env exec -T backend python -c "import urllib.request; body = urllib.request.urlopen('http://localhost:8000/metrics').read(); assert b'secure_messenger_http_requests_total' in body"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Run E2EE browser flow against staging stack
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:8080
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run test:e2e -- --project=chromium
+      - name: Verify backup, restore, and migration rollback
+        run: |
+          export DEPLOY_ENV_FILE="$PWD/.ci-staging.env"
+          export BACKUP_DIR="$RUNNER_TEMP/secure-messenger-backups"
+          bash scripts/backup-production.sh
+          export STAGING_ENV_FILE="$DEPLOY_ENV_FILE"
+          export BACKUP_PATH="$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          export ROLLBACK_REVISION=20260807_21
+          bash scripts/restore-staging.sh --confirm-staging-restore
+      - name: Preserve staging diagnostics
+        if: always()
+        run: docker compose --env-file .ci-staging.env logs --no-color > staging-compose.log
+      - name: Upload staging diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-compose-diagnostics
+          path: staging-compose.log
+          retention-days: 14
+      - name: Stop staging stack
+        if: always()
+        run: docker compose --env-file .ci-staging.env down --volumes --remove-orphans

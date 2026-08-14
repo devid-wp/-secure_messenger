@@ -1,4 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
+import process from 'node:process'
+
+const deployedBaseUrl = process.env.PLAYWRIGHT_BASE_URL
 
 export default defineConfig({
   testDir: './e2e',
@@ -8,14 +11,14 @@ export default defineConfig({
   workers: 1,
   reporter: 'list',
   use: {
-    baseURL: 'http://127.0.0.1:5173',
+    baseURL: deployedBaseUrl || 'http://127.0.0.1:5173',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
   ],
-  webServer: [
+  webServer: deployedBaseUrl ? undefined : [
     {
       command: 'python scripts/run_e2e_server.py',
       cwd: '..',
