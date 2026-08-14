@@ -27,6 +27,7 @@ import {
   synchronizeMlsGroup,
 } from '../crypto/e2eeMessaging'
 import { listMlsCredentials } from '../crypto/mlsRuntimeBridge'
+import { synchronizeDeviceMls } from '../crypto/e2eeBootstrap'
 import { decryptAttachment, encryptAttachment, MAX_ATTACHMENT_BYTES } from '../crypto/attachmentCrypto'
 import { createSafetyCode } from '../crypto/safetyCode'
 import { applyMessageLifecycle } from '../crypto/messageLifecycle'
@@ -298,6 +299,14 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     [token]
   )
 
+  useEffect(() => {
+    let cancelled = false
+    synchronizeDeviceMls(token, deviceId).catch(() => {
+      if (!cancelled) setError('Could not register this device for encrypted messaging')
+    })
+    return () => { cancelled = true }
+  }, [deviceId, token])
+
   useEffect(() => () => {
     if (profileAvatarPreviewRef.current) {
       URL.revokeObjectURL(profileAvatarPreviewRef.current)
@@ -459,9 +468,15 @@ function ChatApp({ token, login, deviceId, onLogout }) {
             const envelopes = await response.json()
             for (const envelope of envelopes) {
               if (envelope.content_type !== 'application') continue
-              const item = await decryptEnvelope(group.id, envelope)
-              if (item?.type === 'group_metadata' && item.name) {
-                group.name = item.name
+              try {
+                const item = await decryptEnvelope(group.id, envelope)
+                if (item?.type === 'group_metadata' && item.name) {
+                  group.name = item.name
+                }
+              } catch (mlsError) {
+                if (![MLS_ERROR_CODES.DUPLICATE, MLS_ERROR_CODES.STALE_EPOCH].includes(mlsError.code)) {
+                  setError(`Encrypted group metadata rejected (${mlsError.code || 'protocol_violation'})`)
+                }
               }
             }
           } catch (mlsError) {
@@ -647,6 +662,10 @@ function ChatApp({ token, login, deviceId, onLogout }) {
 
     const connect = () => {
       if (stopped) return
+      if (!navigator.onLine) {
+        setWsReady(false)
+        return
+      }
       const ws = new WebSocket(
         `${WS_URL}/api/v1/realtime/ws`,
         [`bearer.${token}`]
@@ -687,7 +706,7 @@ function ChatApp({ token, login, deviceId, onLogout }) {
           onLogout()
           return
         }
-        if (!stopped) {
+        if (!stopped && navigator.onLine) {
           const delay = Math.min(1000 * (2 ** reconnectAttempt), 30000)
           reconnectAttempt += 1
           reconnectTimerRef.current = window.setTimeout(connect, delay)
@@ -805,9 +824,20 @@ function ChatApp({ token, login, deviceId, onLogout }) {
       }
     }
 
+    const handleOffline = () => {
+      setWsReady(false)
+      wsRef.current?.close()
+    }
+    const handleOnline = () => {
+      if (!stopped && !wsRef.current) connect()
+    }
+    window.addEventListener('offline', handleOffline)
+    window.addEventListener('online', handleOnline)
     connect()
     return () => {
       stopped = true
+      window.removeEventListener('offline', handleOffline)
+      window.removeEventListener('online', handleOnline)
       window.clearTimeout(reconnectTimerRef.current)
       wsRef.current?.close()
       wsRef.current = null
@@ -1092,48 +1122,66 @@ function ChatApp({ token, login, deviceId, onLogout }) {
     const normalizedLogin = loginValue.trim().replace(/^@/, '')
     if (!normalizedLogin || !selectedChatId || memberBusy) return
     setMemberBusy(true)
-    let removedDeviceIds = []
-    if (action === 'remove') {
-      const directoryResponse = await fetch(
-        `${API_URL}/api/v1/e2ee/chats/${selectedChatId}/devices`,
-        { headers: authHeaders }
+    try {
+      let removedDeviceIds = []
+      if (action === 'remove') {
+        const directoryResponse = await fetch(
+          `${API_URL}/api/v1/e2ee/chats/${selectedChatId}/devices`,
+          { headers: authHeaders }
+        )
+        if (directoryResponse.ok) {
+          const directory = await directoryResponse.json()
+          removedDeviceIds = directory.devices
+            .filter((device) => device.login === normalizedLogin)
+            .map((device) => device.device_id)
+        }
+      }
+      const paths = {
+        invite: `invitations`,
+        add: `members`,
+        remove: `members/${encodeURIComponent(normalizedLogin)}`,
+      }
+      const response = await fetch(
+        `${API_URL}/api/v1/chats/groups/${selectedChatId}/${paths[action]}`,
+        {
+          method: action === 'remove' ? 'DELETE' : 'POST',
+          headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: action === 'remove' ? undefined : JSON.stringify({ login: normalizedLogin }),
+        }
       )
-      if (directoryResponse.ok) {
-        const directory = await directoryResponse.json()
-        removedDeviceIds = directory.devices
-          .filter((device) => device.login === normalizedLogin)
-          .map((device) => device.device_id)
+      const responseBody = response.ok ? null : await response.json().catch(() => null)
+      if (!response.ok) {
+        setError(responseBody?.detail || 'Member operation failed')
+        return
       }
-    }
-    const paths = {
-      invite: `invitations`,
-      add: `members`,
-      remove: `members/${encodeURIComponent(normalizedLogin)}`,
-    }
-    const response = await fetch(
-      `${API_URL}/api/v1/chats/groups/${selectedChatId}/${paths[action]}`,
-      {
-        method: action === 'remove' ? 'DELETE' : 'POST',
-        headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: action === 'remove' ? undefined : JSON.stringify({ login: normalizedLogin }),
+      if (action === 'add') {
+        let group = await response.json()
+        const encryptedName = chats.find((item) => item.id === selectedChatId)?.name
+        await synchronizeMlsGroup(token, deviceId, selectedChatId)
+        if (encryptedName) {
+          await encryptAndPublish(token, selectedChatId, {
+            client_id: crypto.randomUUID(),
+            sent_at: new Date().toISOString(),
+            operation: 'group_metadata',
+            name: encryptedName,
+          })
+          group = { ...group, name: encryptedName }
+        }
+        setChats((previous) => previous.map((item) => (
+          item.id === group.id ? group : item
+        )))
       }
-    )
-    const responseBody = response.ok ? null : await response.json().catch(() => null)
-    setError(response.ok ? 'Group updated' : (responseBody?.detail || 'Member operation failed'))
-    if (response.ok && action === 'add') {
-      const group = await response.json()
-      setChats((previous) => previous.map((item) => (
-        item.id === group.id ? group : item
-      )))
-    }
-    if (response.ok) {
       if (action === 'remove' && removedDeviceIds.length) {
         await removeMlsMembers(token, selectedChatId, removedDeviceIds)
       }
       setMemberDialog(null)
       setMemberLogin('')
+      setError('Group updated')
+    } catch (memberError) {
+      setError(memberError.message || 'Encrypted group update failed')
+    } finally {
+      setMemberBusy(false)
     }
-    setMemberBusy(false)
   }
 
   const acceptInvitation = async (invitation) => {

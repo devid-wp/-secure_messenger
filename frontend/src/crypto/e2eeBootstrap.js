@@ -2,6 +2,9 @@ import { initializeMls, mlsRuntimeAvailable } from './mlsRuntimeBridge'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 export const KEY_PACKAGE_TARGET = 20
+export const BOOTSTRAP_REFRESH_MS = 60_000
+const completedBootstrap = new Map()
+const pendingBootstrap = new Map()
 
 function bytesToBase64(bytes) {
   let binary = ''
@@ -22,7 +25,7 @@ async function api(path, token, options = {}) {
   return response.status === 204 ? null : response.json()
 }
 
-export async function synchronizeDeviceMls(token, deviceId) {
+async function performDeviceMlsSync(token, deviceId) {
   if (!mlsRuntimeAvailable() || !token || !deviceId) return null
 
   const inventory = await api('/key-packages/status', token)
@@ -46,4 +49,35 @@ export async function synchronizeDeviceMls(token, deviceId) {
     })
   }
   return { ...identity, available: inventory.available + material.keyPackages.length }
+}
+
+export async function synchronizeDeviceMls(token, deviceId) {
+  if (!mlsRuntimeAvailable() || !token || !deviceId) return null
+  // Device ids are globally unique. Do not retain bearer tokens in the
+  // process-wide cache after the session has refreshed or logged out.
+  const cacheKey = deviceId
+  const completed = completedBootstrap.get(cacheKey)
+  if (completed && completed.expiresAt > Date.now()) {
+    // A lock terminates the Worker and drops the in-memory WasmMlsClient. The
+    // server registration may still be fresh, but the encrypted local state
+    // must be restored into the new Worker before any group operation.
+    await initializeMls(deviceId, 0)
+    return completed.value
+  }
+  const pending = pendingBootstrap.get(cacheKey)
+  if (pending) return pending
+
+  const synchronization = performDeviceMlsSync(token, deviceId)
+    .then((value) => {
+      completedBootstrap.set(cacheKey, { value, expiresAt: Date.now() + BOOTSTRAP_REFRESH_MS })
+      return value
+    })
+    .finally(() => pendingBootstrap.delete(cacheKey))
+  pendingBootstrap.set(cacheKey, synchronization)
+  return synchronization
+}
+
+export function resetDeviceMlsBootstrapForTests() {
+  completedBootstrap.clear()
+  pendingBootstrap.clear()
 }
