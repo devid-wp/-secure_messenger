@@ -98,7 +98,6 @@ jobs:
           output: audit-results/trivy-backend.json
           severity: CRITICAL,HIGH
           exit-code: "1"
-          ignore-unfixed: true
       - name: Audit frontend container image
         id: trivy_frontend
         continue-on-error: true
@@ -109,7 +108,6 @@ jobs:
           output: audit-results/trivy-frontend.json
           severity: CRITICAL,HIGH
           exit-code: "1"
-          ignore-unfixed: true
       - name: Install supported Chromium browser
         working-directory: frontend
         run: npx playwright install --with-deps chromium
