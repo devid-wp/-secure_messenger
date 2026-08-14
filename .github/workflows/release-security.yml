@@ -91,7 +91,7 @@ jobs:
       - name: Audit backend container image
         id: trivy_backend
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: secure-messenger-backend:ci
           format: json
@@ -101,7 +101,7 @@ jobs:
       - name: Audit frontend container image
         id: trivy_frontend
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: secure-messenger-frontend:ci
           format: json
