@@ -26,7 +26,13 @@ async function registerLoginAndCreateVault(page, login) {
   await expect(page.getByRole('heading', { name: 'Protect this device' })).toBeVisible()
   await page.getByPlaceholder('Local passphrase').fill(VAULT_PASSWORD)
   await page.getByPlaceholder('Confirm passphrase').fill(VAULT_PASSWORD)
+  const keyPackagesPublished = page.waitForResponse((response) => (
+    response.url().endsWith('/api/v1/e2ee/key-packages')
+      && response.request().method() === 'POST'
+      && response.ok()
+  ))
   await page.getByRole('button', { name: 'Create protected vault' }).click()
+  await keyPackagesPublished
   await expect(page.getByText('Local vault unlocked')).toBeVisible()
   return session
 }
@@ -45,6 +51,7 @@ async function selectConversation(page, username) {
   await expect(conversation).toBeVisible()
   await conversation.click()
   await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled()
+  await expect(page.locator('.messages-skeleton')).toHaveCount(0)
 }
 
 test('group membership delivers encrypted metadata and application messages', async ({ browser, request }) => {
@@ -61,7 +68,7 @@ test('group membership delivers encrypted metadata and application messages', as
   }
 
   const ownerSession = await registerLoginAndCreateVault(owner, 'e2egroupowner')
-  await registerLoginAndCreateVault(member, 'e2egroupmember')
+  const memberSession = await registerLoginAndCreateVault(member, 'e2egroupmember')
 
   // Membership can only be granted to a known direct contact.
   await selectConversation(owner, 'e2egroupmember')
@@ -73,12 +80,14 @@ test('group membership delivers encrypted metadata and application messages', as
   await owner.getByRole('button', { name: 'Create group', exact: true }).last().click()
   const group = await (await groupResponse).json()
 
+  await expect(owner.getByRole('dialog', { name: 'New group' })).toHaveCount(0)
   await expect(owner.getByRole('button', { name: 'Conversation menu' })).toBeVisible()
   await owner.getByRole('button', { name: 'Conversation menu' }).click()
   await owner.getByRole('button', { name: 'Add member', exact: true }).click()
   await owner.getByPlaceholder('Exact login').fill('e2egroupmember')
   await owner.getByRole('button', { name: 'Continue', exact: true }).click()
-  await expect(owner.getByText('Group updated')).toBeVisible()
+  await expect(owner.getByRole('dialog', { name: 'Add member' })).toHaveCount(0)
+  await expect(owner.getByText('2 members · online')).toBeVisible()
 
   // Sending after the membership update synchronizes the MLS group, producing
   // an Add Commit and Welcome before the application envelope.
@@ -86,13 +95,20 @@ test('group membership delivers encrypted metadata and application messages', as
   await owner.getByRole('button', { name: 'Send message' }).click()
   await expect(owner.getByText(GROUP_MESSAGE)).toBeVisible()
 
-  const envelopes = await (await request.get(
-    `http://127.0.0.1:8000/api/v1/e2ee/chats/${group.id}/envelopes?after=0`,
-    { headers: { Authorization: `Bearer ${ownerSession.access_token}` } },
-  )).json()
-  expect(envelopes.some((item) => item.content_type === 'commit')).toBeTruthy()
-  expect(envelopes.some((item) => item.content_type === 'welcome')).toBeTruthy()
-  expect(envelopes.some((item) => item.content_type === 'application')).toBeTruthy()
+  let envelopes = []
+  await expect.poll(async () => {
+    const ownerEnvelopes = await (await request.get(
+      `http://127.0.0.1:8000/api/v1/e2ee/chats/${group.id}/envelopes?after=0`,
+      { headers: { Authorization: `Bearer ${ownerSession.access_token}` } },
+    )).json()
+    const memberEnvelopes = await (await request.get(
+      `http://127.0.0.1:8000/api/v1/e2ee/chats/${group.id}/envelopes?after=0`,
+      { headers: { Authorization: `Bearer ${memberSession.access_token}` } },
+    )).json()
+    envelopes = [...ownerEnvelopes, ...memberEnvelopes]
+    const types = new Set(envelopes.map((item) => item.content_type))
+    return ['commit', 'welcome', 'application'].every((type) => types.has(type))
+  }).toBeTruthy()
 
   await reloadAndUnlock(member)
   const groupConversation = member.locator('.contact-item').filter({ hasText: GROUP_NAME }).first()
@@ -136,14 +152,17 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
 
   await selectConversation(alice, 'e2ebob')
   await reloadAndUnlock(bob)
+  await selectConversation(bob, 'e2ealice')
   await reloadAndUnlock(alice)
   await selectConversation(alice, 'e2ebob')
   await reloadAndUnlock(bob)
+  await selectConversation(bob, 'e2ealice')
 
   await alice.getByRole('textbox', { name: 'Message', exact: true }).fill(MESSAGE)
   await alice.getByRole('button', { name: 'Send message' }).click()
   await expect(alice.getByText(MESSAGE)).toBeVisible()
   await reloadAndUnlock(bob)
+  await selectConversation(bob, 'e2ealice')
   await expect(bob.getByText(MESSAGE)).toBeVisible()
 
   // An application composed while disconnected must remain in the encrypted
@@ -161,6 +180,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await expect.poll(() => newestApplication?.id, { timeout: 45_000 }).not.toBe(applicationBeforeOffline)
   await expect(alice.getByText('Connection interrupted. Queued messages will retry automatically.')).toHaveCount(0)
   await reloadAndUnlock(bob)
+  await selectConversation(bob, 'e2ealice')
   await expect(bob.getByText(OFFLINE_MESSAGE)).toBeVisible()
 
   await alice.route('**/api/v1/media/attachments', (route) => route.abort('connectionreset'), { times: 1 })
@@ -176,6 +196,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await alice.locator('input[type="file"].visually-hidden').setInputFiles(attachmentFixture)
   await expect.poll(() => uploadedMedia).not.toBeNull()
   await reloadAndUnlock(bob)
+  await selectConversation(bob, 'e2ealice')
   const download = bob.getByText('Download decrypted file')
   await expect(download).toBeVisible()
   const recovered = await bob.evaluate(async () => {
@@ -194,11 +215,12 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await expect(alice.getByText(MESSAGE)).toHaveCount(0)
   await alice.getByPlaceholder('Local passphrase').fill(VAULT_PASSWORD)
   await alice.getByRole('button', { name: 'Unlock' }).click()
+  await selectConversation(alice, 'e2ebob')
   await expect(alice.getByText(MESSAGE)).toBeVisible()
 
   await alice.getByRole('button', { name: 'Change passphrase' }).click()
   await alice.getByPlaceholder('Current passphrase').fill(VAULT_PASSWORD)
-  await alice.getByPlaceholder('New passphrase').fill(CHANGED_VAULT_PASSWORD)
+  await alice.getByPlaceholder('New passphrase', { exact: true }).fill(CHANGED_VAULT_PASSWORD)
   await alice.getByPlaceholder('Confirm new passphrase').fill(CHANGED_VAULT_PASSWORD)
   await alice.getByRole('button', { name: 'Save passphrase' }).click()
   await expect(alice.getByRole('heading', { name: 'Change local passphrase' })).toHaveCount(0)
@@ -208,13 +230,14 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await expect(alice.getByRole('alert')).toContainText('local vault could not be opened')
   await alice.getByPlaceholder('Local passphrase').fill(CHANGED_VAULT_PASSWORD)
   await alice.getByRole('button', { name: 'Unlock' }).click()
+  await selectConversation(alice, 'e2ebob')
   await expect(alice.getByText(MESSAGE)).toBeVisible()
 
   // Restore the fixture passphrase so subsequent reload checks continue to
   // exercise the shared reloadAndUnlock helper.
   await alice.getByRole('button', { name: 'Change passphrase' }).click()
   await alice.getByPlaceholder('Current passphrase').fill(CHANGED_VAULT_PASSWORD)
-  await alice.getByPlaceholder('New passphrase').fill(VAULT_PASSWORD)
+  await alice.getByPlaceholder('New passphrase', { exact: true }).fill(VAULT_PASSWORD)
   await alice.getByPlaceholder('Confirm new passphrase').fill(VAULT_PASSWORD)
   await alice.getByRole('button', { name: 'Save passphrase' }).click()
 
@@ -264,6 +287,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   expect(lostJoined).toBeTruthy()
 
   await reloadAndUnlock(bob)
+  await selectConversation(bob, 'e2ealice')
   await expect(bob.getByText(MESSAGE)).toBeVisible()
   await expect(bob.getByText('Contact credential or device set changed')).toBeVisible()
   const updateEpoch = await bob.evaluate(async ({ chatId, token }) => {

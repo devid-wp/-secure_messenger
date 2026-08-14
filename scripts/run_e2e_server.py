@@ -24,6 +24,10 @@ def main() -> None:
         "MEDIA_DIR": str(RUNTIME / "media"),
         "UPLOAD_DIR": str(RUNTIME / "uploads"),
         "CORS_ORIGINS": "http://127.0.0.1:5173",
+        # The browser security scenario intentionally performs many reload,
+        # polling, device and envelope requests. Rate-limit behavior is covered
+        # separately by backend tests; it must not truncate this E2E workflow.
+        "RATE_LIMIT_REQUESTS": "10000",
     })
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "migrations"))
