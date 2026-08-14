@@ -471,12 +471,7 @@ mod tests {
     }
 
     fn wire_message(client: &WasmMlsClient, chat_id: &str, plaintext: &[u8]) -> WireOutput {
-        serde_json::from_str(
-            &client
-                .encrypt(chat_id.into(), plaintext.to_vec())
-                .unwrap(),
-        )
-        .unwrap()
+        serde_json::from_str(&client.encrypt(chat_id.into(), plaintext.to_vec()).unwrap()).unwrap()
     }
 
     fn process_output(client: &WasmMlsClient, chat_id: &str, message: &str) -> ProcessOutput {
@@ -551,17 +546,18 @@ mod tests {
             assert!(members.contains(&"alice-device".to_string()));
             assert!(members.contains(&"bob-phone".to_string()));
             assert!(members.contains(&"bob-browser".to_string()));
-            let credentials: Vec<DeviceCredential> = serde_json::from_str(
-                &client.group_credentials(chat_id.into()).unwrap(),
-            )
-            .unwrap();
+            let credentials: Vec<DeviceCredential> =
+                serde_json::from_str(&client.group_credentials(chat_id.into()).unwrap()).unwrap();
             assert_eq!(credentials.len(), 3);
             assert!(credentials.iter().all(|credential| {
                 B64.decode(&credential.identity_key)
-                    .map(|key| Sha256::digest(key)
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>() == credential.fingerprint)
+                    .map(|key| {
+                        Sha256::digest(key)
+                            .iter()
+                            .map(|byte| format!("{byte:02x}"))
+                            .collect::<String>()
+                            == credential.fingerprint
+                    })
                     .unwrap_or(false)
             }));
         }
@@ -627,8 +623,7 @@ mod tests {
             serde_json::from_str(&coordinator.create_group(chat_id.into()).unwrap()).unwrap();
         assert_eq!(initial.epoch, 0);
 
-        let phone: Bootstrap =
-            serde_json::from_str(&member_phone.bootstrap(1).unwrap()).unwrap();
+        let phone: Bootstrap = serde_json::from_str(&member_phone.bootstrap(1).unwrap()).unwrap();
         let browser: Bootstrap =
             serde_json::from_str(&member_browser.bootstrap(1).unwrap()).unwrap();
         let packages = serde_json::to_string(&vec![
@@ -636,13 +631,14 @@ mod tests {
             browser.key_packages[0].clone(),
         ])
         .unwrap();
-        let add: AddOutput = serde_json::from_str(
-            &coordinator
-                .add_members(chat_id.into(), packages)
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(add.epoch, initial.epoch + 1, "Add Commit must advance epoch");
+        let add: AddOutput =
+            serde_json::from_str(&coordinator.add_members(chat_id.into(), packages).unwrap())
+                .unwrap();
+        assert_eq!(
+            add.epoch,
+            initial.epoch + 1,
+            "Add Commit must advance epoch"
+        );
 
         let revoke: WireOutput = serde_json::from_str(
             &coordinator
@@ -667,10 +663,8 @@ mod tests {
             revoke.epoch + 1,
             "participant leave Remove Commit must advance epoch"
         );
-        let remaining: Vec<String> = serde_json::from_str(
-            &coordinator.group_members(chat_id.into()).unwrap(),
-        )
-        .unwrap();
+        let remaining: Vec<String> =
+            serde_json::from_str(&coordinator.group_members(chat_id.into()).unwrap()).unwrap();
         assert_eq!(remaining, vec!["owner-device"]);
     }
 
