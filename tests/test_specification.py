@@ -25,7 +25,7 @@ class ProjectContractTests(unittest.TestCase):
         manifest = (PROJECT_ROOT / "frontend/src-wasm/Cargo.toml").read_text(encoding="utf-8")
         runtime = (PROJECT_ROOT / "frontend/src-wasm/src/lib.rs").read_text(encoding="utf-8")
 
-        self.assertIn('openmls = { version = "=0.8.1"', manifest)
+        self.assertIn('openmls = { version = "=0.9.0-rc.2"', manifest)
         self.assertIn("MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519", runtime)
 
 

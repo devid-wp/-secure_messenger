@@ -29,8 +29,8 @@ opt-level = "s"
 panic = "abort"
 strip = true
 
-# OpenMLS 0.8.1 contains a debug_assert on the normal AEAD rejection path.
-# Disable debug assertions in this profile so negative ciphertext tests observe
-# the Result returned in production instead of aborting inside the dependency.
+# Exercise negative ciphertext tests with production-style AEAD error handling.
+# Dependency debug assertions must not turn an expected authentication failure
+# into a process abort before the caller can observe the returned Result.
 [profile.test]
 debug-assertions = false
