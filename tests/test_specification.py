@@ -28,6 +28,23 @@ class ProjectContractTests(unittest.TestCase):
         self.assertIn('openmls = { version = "=0.9.0-rc.2"', manifest)
         self.assertIn("MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519", runtime)
 
+    def test_frontend_nginx_keeps_runtime_writes_on_tmpfs(self) -> None:
+        dockerfile = (PROJECT_ROOT / "frontend/Dockerfile").read_text(encoding="utf-8")
+        nginx = (PROJECT_ROOT / "frontend/nginx-main.conf").read_text(encoding="utf-8")
+        compose = (PROJECT_ROOT / "compose.yaml").read_text(encoding="utf-8")
+
+        self.assertIn("COPY nginx-main.conf /etc/nginx/nginx.conf", dockerfile)
+        for directive in (
+            "pid /tmp/nginx.pid;",
+            "client_body_temp_path /tmp/client_temp;",
+            "proxy_temp_path /tmp/proxy_temp;",
+            "fastcgi_temp_path /tmp/fastcgi_temp;",
+            "uwsgi_temp_path /tmp/uwsgi_temp;",
+            "scgi_temp_path /tmp/scgi_temp;",
+        ):
+            self.assertIn(directive, nginx)
+        self.assertIn("tmpfs: [/tmp]", compose)
+
 
 if __name__ == "__main__":
     unittest.main()
