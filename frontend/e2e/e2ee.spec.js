@@ -305,15 +305,27 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await alice.getByRole('button', { name: 'Main menu' }).click()
   await alice.getByRole('menuitem', { name: 'Devices' }).click()
   const lostRow = alice.locator('.device-row').filter({ hasNotText: 'This device' }).filter({ hasText: 'ACTIVE' }).last()
+  const revokeResponse = alice.waitForResponse((response) => (
+    response.url().endsWith(`/api/v1/auth/devices/${lostSession.device_id}`)
+      && response.request().method() === 'DELETE'
+  ))
   alice.once('dialog', (dialog) => dialog.accept())
   await lostRow.getByRole('button', { name: 'Revoke' }).click()
-  await expect(alice.getByText(/MLS Remove Commit applied in 1 conversation/)).toBeVisible()
+  expect((await revokeResponse).ok()).toBeTruthy()
+  const revokedRow = alice.locator('.device-row').filter({ hasNotText: 'This device' }).filter({ hasText: 'REVOKED' }).last()
+  await expect(revokedRow).toBeVisible()
   await alice.getByRole('dialog', { name: 'Trusted devices' }).getByRole('button', { name: 'Close' }).click()
 
-  const afterRevokeEnvelopes = await (await request.get(
-    `http://127.0.0.1:8000/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`,
-    { headers: { Authorization: `Bearer ${aliceSession.access_token}` } },
-  )).json()
+  let afterRevokeEnvelopes = []
+  await expect.poll(async () => {
+    afterRevokeEnvelopes = await (await request.get(
+      `http://127.0.0.1:8000/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`,
+      { headers: { Authorization: `Bearer ${aliceSession.access_token}` } },
+    )).json()
+    return afterRevokeEnvelopes.some((item) => (
+      item.content_type === 'commit' && item.epoch > updateEpoch
+    ))
+  }, { timeout: 45_000 }).toBeTruthy()
   const removeCommit = afterRevokeEnvelopes
     .filter((item) => item.content_type === 'commit' && item.epoch > updateEpoch)
     .sort((left, right) => right.epoch - left.epoch)[0]
