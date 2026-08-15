@@ -19,7 +19,7 @@ COPY --from=wasm /wasm-generated ./src/crypto/wasm-generated
 ENV VITE_API_URL=""
 RUN npx vite build
 
-FROM nginx:1.29.7-alpine3.23
+FROM nginx:1.30.3-alpine3.23-slim@sha256:d5b51cfc7d55fc7a7bcf4d1d577b9c3738331df56d68f0b1d8ac9795b9470a5a
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 RUN chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /var/run
