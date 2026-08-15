@@ -9,6 +9,11 @@ const OFFLINE_MESSAGE = 'E2E_SENTINEL_54e2c00a_offline_reconnect'
 const FILE_PLAINTEXT = 'E2E_SENTINEL_71db60e9_file'
 const GROUP_NAME = 'E2E_SENTINEL_a934e8f1_group_name'
 const GROUP_MESSAGE = 'E2E_SENTINEL_f7c4102a_group_message'
+const RUN_SUFFIX = Date.now().toString(36).slice(-6)
+
+function uniqueLogin(base, testInfo) {
+  return `${base}${RUN_SUFFIX}${testInfo.repeatEachIndex}${testInfo.retry}`
+}
 
 async function registerLoginAndCreateVault(page, login) {
   await page.goto('/')
@@ -54,12 +59,14 @@ async function selectConversation(page, username) {
   await expect(page.locator('.messages-skeleton')).toHaveCount(0)
 }
 
-test('group membership delivers encrypted metadata and application messages', async ({ browser, request }) => {
+test('group membership delivers encrypted metadata and application messages', async ({ browser, request }, testInfo) => {
   const ownerContext = await browser.newContext()
   const memberContext = await browser.newContext()
   const owner = await ownerContext.newPage()
   const member = await memberContext.newPage()
   const observedBodies = []
+  const ownerLogin = uniqueLogin('e2egroupowner', testInfo)
+  const memberLogin = uniqueLogin('e2egroupmember', testInfo)
 
   for (const page of [owner, member]) {
     page.on('request', (networkRequest) => {
@@ -67,11 +74,11 @@ test('group membership delivers encrypted metadata and application messages', as
     })
   }
 
-  const ownerSession = await registerLoginAndCreateVault(owner, 'e2egroupowner')
-  const memberSession = await registerLoginAndCreateVault(member, 'e2egroupmember')
+  const ownerSession = await registerLoginAndCreateVault(owner, ownerLogin)
+  const memberSession = await registerLoginAndCreateVault(member, memberLogin)
 
   // Membership can only be granted to a known direct contact.
-  await selectConversation(owner, 'e2egroupmember')
+  await selectConversation(owner, memberLogin)
   const groupResponse = owner.waitForResponse((response) => (
     response.url().endsWith('/api/v1/chats/groups') && response.request().method() === 'POST'
   ))
@@ -84,7 +91,7 @@ test('group membership delivers encrypted metadata and application messages', as
   await expect(owner.getByRole('button', { name: 'Conversation menu' })).toBeVisible()
   await owner.getByRole('button', { name: 'Conversation menu' }).click()
   await owner.getByRole('button', { name: 'Add member', exact: true }).click()
-  await owner.getByPlaceholder('Exact login').fill('e2egroupmember')
+  await owner.getByPlaceholder('Exact login').fill(memberLogin)
   await owner.getByRole('button', { name: 'Continue', exact: true }).click()
   await expect(owner.getByRole('dialog', { name: 'Add member' })).toHaveCount(0)
   await expect(owner.getByText('2 members · online')).toBeVisible()
@@ -123,7 +130,7 @@ test('group membership delivers encrypted metadata and application messages', as
   await memberContext.close()
 })
 
-test('two browser devices keep messages, files, vault and post-removal epochs opaque', async ({ browser, request }) => {
+test('two browser devices keep messages, files, vault and post-removal epochs opaque', async ({ browser, request }, testInfo) => {
   const aliceContext = await browser.newContext()
   const bobContext = await browser.newContext()
   const aliceLostContext = await browser.newContext()
@@ -133,6 +140,8 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   const observedBodies = []
   let uploadedMedia = null
   let newestApplication = null
+  const aliceLogin = uniqueLogin('e2ealice', testInfo)
+  const bobLogin = uniqueLogin('e2ebob', testInfo)
 
   for (const page of [alice, bob, aliceLost]) {
     page.on('request', (networkRequest) => {
@@ -147,22 +156,22 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
     }
   })
 
-  const aliceSession = await registerLoginAndCreateVault(alice, 'e2ealice')
-  const bobSession = await registerLoginAndCreateVault(bob, 'e2ebob')
+  const aliceSession = await registerLoginAndCreateVault(alice, aliceLogin)
+  const bobSession = await registerLoginAndCreateVault(bob, bobLogin)
 
-  await selectConversation(alice, 'e2ebob')
+  await selectConversation(alice, bobLogin)
   await reloadAndUnlock(bob)
-  await selectConversation(bob, 'e2ealice')
+  await selectConversation(bob, aliceLogin)
   await reloadAndUnlock(alice)
-  await selectConversation(alice, 'e2ebob')
+  await selectConversation(alice, bobLogin)
   await reloadAndUnlock(bob)
-  await selectConversation(bob, 'e2ealice')
+  await selectConversation(bob, aliceLogin)
 
   await alice.getByRole('textbox', { name: 'Message', exact: true }).fill(MESSAGE)
   await alice.getByRole('button', { name: 'Send message' }).click()
   await expect(alice.getByText(MESSAGE)).toBeVisible()
   await reloadAndUnlock(bob)
-  await selectConversation(bob, 'e2ealice')
+  await selectConversation(bob, aliceLogin)
   await expect(bob.getByText(MESSAGE)).toBeVisible()
 
   // An application composed while disconnected must remain in the encrypted
@@ -180,7 +189,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await expect.poll(() => newestApplication?.id, { timeout: 45_000 }).not.toBe(applicationBeforeOffline)
   await expect(alice.getByText('Connection interrupted. Queued messages will retry automatically.')).toHaveCount(0)
   await reloadAndUnlock(bob)
-  await selectConversation(bob, 'e2ealice')
+  await selectConversation(bob, aliceLogin)
   await expect(bob.getByText(OFFLINE_MESSAGE)).toBeVisible()
 
   await alice.route('**/api/v1/media/attachments', (route) => route.abort('connectionreset'), { times: 1 })
@@ -196,7 +205,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await alice.locator('input[type="file"].visually-hidden').setInputFiles(attachmentFixture)
   await expect.poll(() => uploadedMedia).not.toBeNull()
   await reloadAndUnlock(bob)
-  await selectConversation(bob, 'e2ealice')
+  await selectConversation(bob, aliceLogin)
   const download = bob.getByText('Download decrypted file')
   await expect(download).toBeVisible()
   const recovered = await bob.evaluate(async () => {
@@ -215,7 +224,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await expect(alice.getByText(MESSAGE)).toHaveCount(0)
   await alice.getByPlaceholder('Local passphrase').fill(VAULT_PASSWORD)
   await alice.getByRole('button', { name: 'Unlock' }).click()
-  await selectConversation(alice, 'e2ebob')
+  await selectConversation(alice, bobLogin)
   await expect(alice.getByText(MESSAGE)).toBeVisible()
 
   await alice.getByRole('button', { name: 'Change passphrase' }).click()
@@ -230,7 +239,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await expect(alice.getByRole('alert')).toContainText('local vault could not be opened')
   await alice.getByPlaceholder('Local passphrase').fill(CHANGED_VAULT_PASSWORD)
   await alice.getByRole('button', { name: 'Unlock' }).click()
-  await selectConversation(alice, 'e2ebob')
+  await selectConversation(alice, bobLogin)
   await expect(alice.getByText(MESSAGE)).toBeVisible()
 
   // Restore the fixture passphrase so subsequent reload checks continue to
@@ -243,7 +252,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
 
   const lostSession = await (async () => {
     await aliceLost.goto('/')
-    await aliceLost.locator('#login').fill('e2ealice')
+    await aliceLost.locator('#login').fill(aliceLogin)
     await aliceLost.locator('#password').fill(ACCOUNT_PASSWORD)
     const response = aliceLost.waitForResponse((item) => item.url().endsWith('/api/v1/auth/login') && item.request().method() === 'POST')
     await aliceLost.getByRole('button', { name: 'Sign in' }).click()
@@ -287,7 +296,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   expect(lostJoined).toBeTruthy()
 
   await reloadAndUnlock(bob)
-  await selectConversation(bob, 'e2ealice')
+  await selectConversation(bob, aliceLogin)
   await expect(bob.getByText(MESSAGE)).toBeVisible()
   await expect(bob.getByText('Contact credential or device set changed')).toBeVisible()
   const updateEpoch = await bob.evaluate(async ({ chatId, token }) => {
