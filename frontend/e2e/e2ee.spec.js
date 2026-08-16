@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { Buffer } from 'node:buffer'
+import process from 'node:process'
 
 const ACCOUNT_PASSWORD = 'account-password-123'
 const VAULT_PASSWORD = 'local-vault-password-123'
@@ -10,6 +11,11 @@ const FILE_PLAINTEXT = 'E2E_SENTINEL_71db60e9_file'
 const GROUP_NAME = 'E2E_SENTINEL_a934e8f1_group_name'
 const GROUP_MESSAGE = 'E2E_SENTINEL_f7c4102a_group_message'
 const RUN_SUFFIX = Date.now().toString(36).slice(-6)
+const API_BASE_URL = (
+  process.env.PLAYWRIGHT_API_URL
+  || process.env.PLAYWRIGHT_BASE_URL
+  || 'http://127.0.0.1:8000'
+).replace(/\/$/, '')
 
 function uniqueLogin(base, testInfo) {
   return `${base}${RUN_SUFFIX}${testInfo.repeatEachIndex}${testInfo.retry}`
@@ -105,11 +111,11 @@ test('group membership delivers encrypted metadata and application messages', as
   let envelopes = []
   await expect.poll(async () => {
     const ownerEnvelopes = await (await request.get(
-      `http://127.0.0.1:8000/api/v1/e2ee/chats/${group.id}/envelopes?after=0`,
+      `${API_BASE_URL}/api/v1/e2ee/chats/${group.id}/envelopes?after=0`,
       { headers: { Authorization: `Bearer ${ownerSession.access_token}` } },
     )).json()
     const memberEnvelopes = await (await request.get(
-      `http://127.0.0.1:8000/api/v1/e2ee/chats/${group.id}/envelopes?after=0`,
+      `${API_BASE_URL}/api/v1/e2ee/chats/${group.id}/envelopes?after=0`,
       { headers: { Authorization: `Bearer ${memberSession.access_token}` } },
     )).json()
     envelopes = [...ownerEnvelopes, ...memberEnvelopes]
@@ -213,7 +219,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
     return link ? await (await fetch(link.href)).text() : null
   })
   expect(recovered).toBe(FILE_PLAINTEXT)
-  const stored = await request.get(`http://127.0.0.1:8000${uploadedMedia.content_url}`, {
+  const stored = await request.get(`${API_BASE_URL}${uploadedMedia.content_url}`, {
     headers: { Authorization: `Bearer ${aliceSession.access_token}` },
   })
   expect(stored.ok()).toBeTruthy()
@@ -265,7 +271,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await reloadAndUnlock(alice)
   let lostWelcome = null
   await expect.poll(async () => {
-    const response = await request.get(`http://127.0.0.1:8000/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`, {
+    const response = await request.get(`${API_BASE_URL}/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`, {
       headers: { Authorization: `Bearer ${lostSession.access_token}` },
     })
     const envelopes = await response.json()
@@ -273,7 +279,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
     return Boolean(lostWelcome)
   }).toBeTruthy()
   const membershipEnvelopes = await (await request.get(
-    `http://127.0.0.1:8000/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`,
+    `${API_BASE_URL}/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`,
     { headers: { Authorization: `Bearer ${aliceSession.access_token}` } },
   )).json()
   const addCommit = membershipEnvelopes.find((item) => (
@@ -328,7 +334,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   let afterRevokeEnvelopes = []
   await expect.poll(async () => {
     afterRevokeEnvelopes = await (await request.get(
-      `http://127.0.0.1:8000/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`,
+      `${API_BASE_URL}/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`,
       { headers: { Authorization: `Bearer ${aliceSession.access_token}` } },
     )).json()
     return afterRevokeEnvelopes.some((item) => (
