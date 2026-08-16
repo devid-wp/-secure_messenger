@@ -146,6 +146,8 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   const observedBodies = []
   let uploadedMedia = null
   let newestApplication = null
+  let aliceAccessToken
+  let bobAccessToken
   const aliceLogin = uniqueLogin('e2ealice', testInfo)
   const bobLogin = uniqueLogin('e2ebob', testInfo)
 
@@ -155,15 +157,25 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
     })
   }
   alice.on('response', async (response) => {
+    if (/\/api\/v1\/auth\/(?:login|refresh)$/.test(response.url()) && response.ok()) {
+      aliceAccessToken = (await response.json()).access_token
+    }
     if (response.url().includes('/api/v1/media/attachments') && response.request().method() === 'POST' && response.ok()) uploadedMedia = await response.json()
     if (response.url().includes('/api/v1/e2ee/chats/') && response.url().endsWith('/envelopes') && response.request().method() === 'POST' && response.ok()) {
       const body = await response.json()
       if (body.content_type === 'application') newestApplication = body
     }
   })
+  bob.on('response', async (response) => {
+    if (/\/api\/v1\/auth\/(?:login|refresh)$/.test(response.url()) && response.ok()) {
+      bobAccessToken = (await response.json()).access_token
+    }
+  })
 
   const aliceSession = await registerLoginAndCreateVault(alice, aliceLogin)
   const bobSession = await registerLoginAndCreateVault(bob, bobLogin)
+  aliceAccessToken = aliceSession.access_token
+  bobAccessToken = bobSession.access_token
 
   await selectConversation(alice, bobLogin)
   await reloadAndUnlock(bob)
@@ -227,7 +239,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   })
   expect(recovered).toBe(FILE_PLAINTEXT)
   const stored = await request.get(`${API_BASE_URL}${uploadedMedia.content_url}`, {
-    headers: { Authorization: `Bearer ${aliceSession.access_token}` },
+    headers: { Authorization: `Bearer ${aliceAccessToken}` },
   })
   expect(stored.ok()).toBeTruthy()
   expect((await stored.body()).toString()).not.toContain(FILE_PLAINTEXT)
@@ -287,7 +299,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   }).toBeTruthy()
   const membershipEnvelopes = await (await request.get(
     `${API_BASE_URL}/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`,
-    { headers: { Authorization: `Bearer ${aliceSession.access_token}` } },
+    { headers: { Authorization: `Bearer ${aliceAccessToken}` } },
   )).json()
   const addCommit = membershipEnvelopes.find((item) => (
     item.content_type === 'commit' && item.epoch === lostWelcome.epoch
@@ -318,7 +330,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
     const update = await bridge.updateMlsGroup(chatId)
     const envelope = await messaging.publishEnvelope(token, chatId, 'commit', update.epoch, update.commit)
     return envelope.epoch
-  }, { chatId: newestApplication.chat_id, token: bobSession.access_token })
+  }, { chatId: newestApplication.chat_id, token: bobAccessToken })
   expect(updateEpoch, 'Update Commit advances the epoch in an independent profile').toBe(addCommit.epoch + 1)
   await reloadAndUnlock(alice)
   await expect(alice.getByText(MESSAGE)).toBeVisible()
@@ -342,7 +354,7 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await expect.poll(async () => {
     afterRevokeEnvelopes = await (await request.get(
       `${API_BASE_URL}/api/v1/e2ee/chats/${newestApplication.chat_id}/envelopes?after=0`,
-      { headers: { Authorization: `Bearer ${aliceSession.access_token}` } },
+      { headers: { Authorization: `Bearer ${aliceAccessToken}` } },
     )).json()
     return afterRevokeEnvelopes.some((item) => (
       item.content_type === 'commit' && item.epoch > updateEpoch

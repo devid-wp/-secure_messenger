@@ -36,7 +36,12 @@ class Settings:
     redis_url: str | None = None
     session_ttl_seconds: int = 900
     refresh_ttl_seconds: int = 2_592_000
-    rate_limit_requests: int = 120
+    # The browser restores conversations, MLS directories and envelopes in
+    # parallel after a reload.  A 120/minute device-wide ceiling rejects a
+    # normal multi-chat restore before any endpoint-specific abuse limit is
+    # reached.  Keep the global guard high enough for that burst; sensitive
+    # authentication and KeyPackage operations retain their tighter limits.
+    rate_limit_requests: int = 600
     rate_limit_window_seconds: int = 60
     upload_dir: Path = DEFAULT_UPLOAD_DIR
     media_storage_backend: str = "local"
@@ -69,7 +74,7 @@ class Settings:
             redis_url=os.environ.get("REDIS_URL") or None,
             session_ttl_seconds=int(os.environ.get("SESSION_TTL_SECONDS", "900")),
             refresh_ttl_seconds=int(os.environ.get("REFRESH_TTL_SECONDS", "2592000")),
-            rate_limit_requests=int(os.environ.get("RATE_LIMIT_REQUESTS", "120")),
+            rate_limit_requests=int(os.environ.get("RATE_LIMIT_REQUESTS", "600")),
             rate_limit_window_seconds=int(
                 os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60")
             ),

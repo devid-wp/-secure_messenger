@@ -275,6 +275,7 @@ class FoundationMigrationTests(unittest.TestCase):
             s3_secret_access_key="secret-key",
         )
         settings.validate()
+        self.assertGreaterEqual(settings.rate_limit_requests, 600)
 
 
 class VersionedApiSmokeTests(unittest.TestCase):
