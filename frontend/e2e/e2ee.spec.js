@@ -208,8 +208,10 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
 
   // Selecting the same file again is an explicit retry. The input is reset
   // after every selection, so browsers must dispatch this second change.
+  const applicationBeforeAttachment = newestApplication?.id
   await alice.locator('input[type="file"].visually-hidden').setInputFiles(attachmentFixture)
   await expect.poll(() => uploadedMedia).not.toBeNull()
+  await expect.poll(() => newestApplication?.id).not.toBe(applicationBeforeAttachment)
   await reloadAndUnlock(bob)
   await selectConversation(bob, aliceLogin)
   const download = bob.getByText('Download decrypted file')
