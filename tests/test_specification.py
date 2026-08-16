@@ -44,6 +44,11 @@ class ProjectContractTests(unittest.TestCase):
         ):
             self.assertIn(directive, nginx)
         self.assertIn("tmpfs: [/tmp]", compose)
+        self.assertIn(
+            'test: ["CMD", "/bin/busybox", "wget", "-q", "--spider", '
+            '"http://127.0.0.1:8080/"]',
+            compose,
+        )
 
 
 if __name__ == "__main__":
