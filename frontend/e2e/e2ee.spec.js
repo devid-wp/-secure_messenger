@@ -211,6 +211,11 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   const applicationBeforeAttachment = newestApplication?.id
   await alice.locator('input[type="file"].visually-hidden').setInputFiles(attachmentFixture)
   await expect.poll(() => uploadedMedia).not.toBeNull()
+  // Upload completion is not enough: MinIO can return before the browser has
+  // encrypted and published the attachment descriptor as an MLS application
+  // envelope.  Wait for the whole UI operation so a slow staging stack cannot
+  // reload the recipient between those two durable writes.
+  await expect(alice.locator('.attachment-progress')).toHaveCount(0)
   await expect.poll(() => newestApplication?.id).not.toBe(applicationBeforeAttachment)
   await reloadAndUnlock(bob)
   await selectConversation(bob, aliceLogin)
