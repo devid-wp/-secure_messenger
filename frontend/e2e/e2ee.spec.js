@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { Buffer } from 'node:buffer'
+import { readFile } from 'node:fs/promises'
 import process from 'node:process'
 
 const ACCOUNT_PASSWORD = 'account-password-123'
@@ -233,10 +234,14 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await selectConversation(bob, aliceLogin)
   const download = bob.getByText('Download decrypted file')
   await expect(download).toBeVisible()
-  const recovered = await bob.evaluate(async () => {
-    const link = document.querySelector('.message__file-download')
-    return link ? await (await fetch(link.href)).text() : null
-  })
+  // Exercise the user-visible download instead of fetching the blob URL from
+  // page JavaScript. Production CSP intentionally keeps `blob:` out of
+  // connect-src, while browser downloads from an authenticated blob link are
+  // the supported attachment flow.
+  const downloadEvent = bob.waitForEvent('download')
+  await bob.locator('.message__file-download').click()
+  const downloadedFile = await downloadEvent
+  const recovered = await readFile(await downloadedFile.path(), 'utf8')
   expect(recovered).toBe(FILE_PLAINTEXT)
   const stored = await request.get(`${API_BASE_URL}${uploadedMedia.content_url}`, {
     headers: { Authorization: `Bearer ${aliceAccessToken}` },
