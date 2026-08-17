@@ -9,6 +9,7 @@ const CHANGED_VAULT_PASSWORD = 'changed-local-vault-password-456'
 const MESSAGE = 'E2E_SENTINEL_8c36f2b4_message'
 const OFFLINE_MESSAGE = 'E2E_SENTINEL_54e2c00a_offline_reconnect'
 const FILE_PLAINTEXT = 'E2E_SENTINEL_71db60e9_file'
+const BEFORE_DEVICE_REMOVAL = 'E2E_SENTINEL_before_device_removal'
 const GROUP_NAME = 'E2E_SENTINEL_a934e8f1_group_name'
 const GROUP_MESSAGE = 'E2E_SENTINEL_f7c4102a_group_message'
 const RUN_SUFFIX = Date.now().toString(36).slice(-6)
@@ -148,7 +149,6 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   let uploadedMedia = null
   let newestApplication = null
   let aliceAccessToken
-  let bobAccessToken
   const aliceLogin = uniqueLogin('e2ealice', testInfo)
   const bobLogin = uniqueLogin('e2ebob', testInfo)
 
@@ -167,16 +167,9 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
       if (body.content_type === 'application') newestApplication = body
     }
   })
-  bob.on('response', async (response) => {
-    if (/\/api\/v1\/auth\/(?:login|refresh)$/.test(response.url()) && response.ok()) {
-      bobAccessToken = (await response.json()).access_token
-    }
-  })
-
   const aliceSession = await registerLoginAndCreateVault(alice, aliceLogin)
-  const bobSession = await registerLoginAndCreateVault(bob, bobLogin)
+  await registerLoginAndCreateVault(bob, bobLogin)
   aliceAccessToken = aliceSession.access_token
-  bobAccessToken = bobSession.access_token
 
   await selectConversation(alice, bobLogin)
   await reloadAndUnlock(bob)
@@ -312,31 +305,18 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   expect(addCommit, 'adding the independent lost-device profile publishes an Add Commit').toBeTruthy()
   expect(addCommit.epoch).toBeGreaterThan(newestApplication.epoch)
   await reloadAndUnlock(aliceLost)
-  const lostJoined = await aliceLost.evaluate(async ({ chatId, deviceId, payload }) => {
-    const bridge = await import('/src/crypto/mlsRuntimeBridge.js')
-    await bridge.initializeMls(deviceId, 0)
-    let members = await bridge.listMlsMembers(chatId).catch(() => [])
-    if (!members.includes(deviceId)) {
-      const bytes = Uint8Array.from(atob(payload), (value) => value.charCodeAt(0))
-      await bridge.joinMlsGroup(bytes)
-      members = await bridge.listMlsMembers(chatId)
-    }
-    return members.includes(deviceId)
-  }, { chatId: newestApplication.chat_id, deviceId: lostSession.device_id, payload: lostWelcome.payload })
-  expect(lostJoined).toBeTruthy()
+  await selectConversation(aliceLost, bobLogin)
 
   await reloadAndUnlock(bob)
   await selectConversation(bob, aliceLogin)
   await expect(bob.getByText(MESSAGE)).toBeVisible()
   await expect(bob.getByText('Contact credential or device set changed')).toBeVisible()
-  const updateEpoch = await bob.evaluate(async ({ chatId, token }) => {
-    const bridge = await import('/src/crypto/mlsRuntimeBridge.js')
-    const messaging = await import('/src/crypto/e2eeMessaging.js')
-    const update = await bridge.updateMlsGroup(chatId)
-    const envelope = await messaging.publishEnvelope(token, chatId, 'commit', update.epoch, update.commit)
-    return envelope.epoch
-  }, { chatId: newestApplication.chat_id, token: bobAccessToken })
-  expect(updateEpoch, 'Update Commit advances the epoch in an independent profile').toBe(addCommit.epoch + 1)
+  await bob.getByRole('textbox', { name: 'Message', exact: true }).fill(BEFORE_DEVICE_REMOVAL)
+  await bob.getByRole('button', { name: 'Send message' }).click()
+  await expect(bob.getByText(BEFORE_DEVICE_REMOVAL)).toBeVisible()
+  await reloadAndUnlock(aliceLost)
+  await selectConversation(aliceLost, bobLogin)
+  await expect(aliceLost.getByText(BEFORE_DEVICE_REMOVAL)).toBeVisible()
   await reloadAndUnlock(alice)
   await expect(alice.getByText(MESSAGE)).toBeVisible()
   await aliceLostContext.setOffline(true)
@@ -362,14 +342,14 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
       { headers: { Authorization: `Bearer ${aliceAccessToken}` } },
     )).json()
     return afterRevokeEnvelopes.some((item) => (
-      item.content_type === 'commit' && item.epoch > updateEpoch
+      item.content_type === 'commit' && item.epoch > addCommit.epoch
     ))
   }, { timeout: 45_000 }).toBeTruthy()
   const removeCommit = afterRevokeEnvelopes
-    .filter((item) => item.content_type === 'commit' && item.epoch > updateEpoch)
+    .filter((item) => item.content_type === 'commit' && item.epoch > addCommit.epoch)
     .sort((left, right) => right.epoch - left.epoch)[0]
   expect(removeCommit, 'revoking the offline profile publishes a Remove Commit').toBeTruthy()
-  expect(removeCommit.epoch).toBe(updateEpoch + 1)
+  expect(removeCommit.epoch).toBe(addCommit.epoch + 1)
 
   const afterRemoval = 'E2E_SENTINEL_after_device_removal'
   const previousApplicationId = newestApplication?.id
@@ -377,20 +357,16 @@ test('two browser devices keep messages, files, vault and post-removal epochs op
   await alice.getByRole('button', { name: 'Send message' }).click()
   await expect.poll(() => newestApplication?.id).not.toBe(previousApplicationId)
   expect(newestApplication.epoch).toBe(removeCommit.epoch)
-  const rejected = await aliceLost.evaluate(async ({ chatId, payload }) => {
-    try {
-      const bridge = await import('/src/crypto/mlsRuntimeBridge.js')
-      const bytes = Uint8Array.from(atob(payload), (value) => value.charCodeAt(0))
-      await bridge.processMls(chatId, bytes)
-      return false
-    } catch { return true }
-  }, { chatId: newestApplication.chat_id, payload: newestApplication.payload })
-  expect(rejected).toBeTruthy()
+  await aliceLostContext.setOffline(false)
+  await aliceLost.reload()
+  await expect(aliceLost.getByRole('button', { name: 'Sign in' })).toBeVisible()
+  await expect(aliceLost.getByText(afterRemoval)).toHaveCount(0)
   expect(lostSession.device_id).not.toBe(aliceSession.device_id)
 
   expect(observedBodies.join('\n')).not.toContain(MESSAGE)
   expect(observedBodies.join('\n')).not.toContain(OFFLINE_MESSAGE)
   expect(observedBodies.join('\n')).not.toContain(FILE_PLAINTEXT)
+  expect(observedBodies.join('\n')).not.toContain(BEFORE_DEVICE_REMOVAL)
   expect(observedBodies.join('\n')).not.toContain(afterRemoval)
 
   // Corrupt the authenticated state ciphertext at rest. Unlock must fail
